@@ -64,7 +64,4 @@ def test_dashboard_deploy_finds_the_app_from_the_repo(tmp_path):
 
 def test_update_engine_records_the_repo_for_the_update_button(tmp_path):
     text = (ROOT / "deploy/update_engine.sh").read_text()
-    assert 'echo "$REPO" > "$SELF/repo"' in text
-    conv = re.search(r"sed -E '([^']+)'", text[text.index('REPO="$(echo'):]).group(1)
-    for url, want in (("https://github.com/a/b.git", "git@github.com:a/b.git"), ("git@github.com:a/b.git", "git@github.com:a/b.git")):
-        assert subprocess.run(["sed", "-E", conv], input=url, capture_output=True, text=True).stdout.strip() == want
+    assert 'bash "$SRC/deploy/update_source.sh" "$SRC" "$SELF"' in text      # tested in tests/test_update_source.py

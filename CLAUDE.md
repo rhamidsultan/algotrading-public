@@ -51,10 +51,15 @@ This repo is the single source of truth. Read this file and `docs/STATUS.md` bef
 - **Mac helper** (`algolab/lab_agent.py`, login item from `deploy/install-mac-agent.command`): runs the backtests and sweeps
   the dashboard sends to "Mac" (Algo Lab › Run on), signing in with `secrets.yaml` dashboard settings.
 - **A new server** (anyone's): `docs/SERVER_SETUP.md`, `sudo bash deploy/new_server.sh`; IBKR optional.
+- **Repos:** this public repo (`algotrading-public`, from 18 Nov 2026) is where work happens: free CI. The private
+  `algotrading` keeps the history before that, and its `ibkr-snapshot` branch (Hamid's US account data, written by a
+  scheduled task): never copy that branch or the private history here. Never commit the server's real address:
+  placeholders only (`<your-ip-with-dashes>.sslip.io`, `203-0-113-10.sslip.io` in tests).
 - **Deploy:** Hamid taps **Update now** on the dashboard (Profile › Server version) after merging: the server
-  pulls `main` from GitHub (read-only deploy key, `deploy/self_update.sh`, run by the `algolab-selfupdate`
-  path unit) and runs `deploy/update_engine.sh`, which swaps the code in with a backup and rolls back if it
-  does not start. The Mac route still works: `bash deploy/make_server_update.sh` then `deploy/update-server.command`.
+  pulls `main` from this repo over https (no key; `deploy/update_source.sh` records it in `/opt/algo-trading/update_repo`,
+  `deploy/self_update.sh` run by the `algolab-selfupdate` path unit) and runs `deploy/update_engine.sh`, which swaps
+  the code in with a backup and rolls back if it does not start. The IBKR snapshot is still read from the private
+  repo with the read-only deploy key (`/opt/algo-trading/repo`). The Mac route still works: `bash deploy/make_server_update.sh` then `deploy/update-server.command`.
 
 ## Market data
 

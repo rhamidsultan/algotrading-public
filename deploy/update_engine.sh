@@ -357,11 +357,9 @@ if [ -f "$SRC/deploy/self_update.sh" ] && command -v systemctl >/dev/null; then
   echo "==> Update from GitHub (the dashboard's Update button)"
   mkdir -p "$SELF/secrets" && chmod 700 "$SELF/secrets"
   install -m 755 "$SRC/deploy/self_update.sh" "$SELF/self_update.sh.new" && mv -f "$SELF/self_update.sh.new" "$SELF/self_update.sh"
-  # the GitHub repo to pull from: stamped by the Mac's pack (deploy/REPO) or this copy's own remote, as ssh
-  REPO="$(cat "$SRC/deploy/REPO" 2>/dev/null || git -C "$SRC" remote get-url origin 2>/dev/null || true)"
-  REPO="$(echo "$REPO" | sed -E 's#^https://([^@/]+@)?github\.com/#git@github.com:#')"
-  case "$REPO" in git@github.com:*) case "$REPO" in *.git) ;; *) REPO="$REPO.git" ;; esac
-                                    echo "$REPO" > "$SELF/repo"; chmod 644 "$SELF/repo" ;; esac
+  # the GitHub repos to pull from: updates (a public repo over https, or this one with the deploy key) and the IBKR
+  # snapshot (deploy key): see deploy/update_source.sh
+  bash "$SRC/deploy/update_source.sh" "$SRC" "$SELF" || echo "    (could not record which GitHub repo to update from)"
   cat > /etc/systemd/system/algolab-selfupdate.service <<UNIT
 [Unit]
 Description=Algo Lab: update the server from GitHub (asked for on the dashboard)
