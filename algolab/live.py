@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import secrets
 import smtplib
 import threading
@@ -63,6 +64,10 @@ class Unconfirmed(Halt):
 
 class NotPlaced(Halt):
     """Zerodha surely did not take the order (it is not in the day's order book): safe to send again."""
+
+
+class Unknown(Exception):
+    """Not known yet (e.g. whether a stop whose answer was lost reached Zerodha): try again later."""
 
 
 class Blocked(Halt):
@@ -170,6 +175,16 @@ class LiveBroker(PaperBroker):
         self._follow_n: dict[str, int] = {}
         self.orders_today = {"date": "", "n": 0}
         self.reconciled = False
+        self.reconciled_on = ""                    # the day reconcile() last passed: a new day checks everything again
+        self.protect_day: dict[str, str] = {}      # contract label -> day its stop was placed (DAY orders end with it)
+        self.renew: set[str] = set()               # short legs whose stop must still be placed again (tried each check)
+        self._day = ""                             # today, as last given to the broker (dates new orders)
+        self._read_err_at: dict[str, float] = {}   # "not read" log lines: when each kind was last logged
+        self._gone_odd: dict[str, float] = {}      # symbol -> when it first did not fit Zerodha (deferred check)
+        self._told: set = set()                    # alerts already sent (kind, label, day)
+        self.pending_stop: dict[str, dict] = {}    # label -> {"tag", "at"} of a stop whose placement answer was lost
+        self.stop_reads_failed = 0                 # protective stops not read at the last full check
+        self._not_held: set = set()                # legs Zerodha no longer holds: no stop is placed again for them
         self.contracts: dict[str, Contract] = {}
         self.lot_of = lambda c: 1
         self.stream = None
@@ -190,6 +205,7 @@ class LiveBroker(PaperBroker):
     def to_dict(self) -> dict:
         d = super().to_dict()
         d["live"] = {"protect": self.protect, "protect_level": self.protect_level, "orders_today": self.orders_today,
+                     "protect_day": self.protect_day, "renew": sorted(self.renew), "pending_stop": self.pending_stop,
                      "released": self.released, "working": self.working, "contracts": {k: c.to_dict() for k, c in self.contracts.items()}}
         return d
 
@@ -199,53 +215,84 @@ class LiveBroker(PaperBroker):
         self.protect = dict(live.get("protect", {}))
         self.protect_level = {k: float(v) for k, v in (live.get("protect_level") or {}).items()}
         self.released = {k: float(v) for k, v in (live.get("released") or {}).items()}
+        self.protect_day = dict(live.get("protect_day") or {})
+        self.renew = set(live.get("renew") or [])
+        self.pending_stop = {k: (v if isinstance(v, dict) else {"tag": str(v), "at": 0.0})
+                             for k, v in (live.get("pending_stop") or {}).items()}
         self.working = {k: dict(v) for k, v in (live.get("working") or {}).items() if isinstance(v, dict)}
         self._read_journal()
         self.orders_today = dict(live.get("orders_today", {"date": "", "n": 0}))
         self.contracts = {k: Contract.from_dict(v) for k, v in live.get("contracts", {}).items()}
 
     # ---- checks ---------------------------------------------------------------------------
-    def reconcile(self) -> None:
+    def reconcile(self, now=None) -> None:
         """Our open positions must match Zerodha's net NRML positions for the same contracts. Several live sessions
-        may hold the same contract: Zerodha's net must then equal ours plus what the other live sessions hold."""
+        may hold the same contract: Zerodha's net must then equal ours plus what the other live sessions hold.
+        Runs before the first order and again on each new day: protective stops are DAY orders, so the morning after
+        a leg was held overnight Zerodha no longer knows them; they are found gone here and placed again (also for
+        the legs that do match when another leg does not). Legs past their expiry are left to the settlement."""
+        day = self._today(now)
+        if self.reconciled and self.reconciled_on and self.reconciled_on != day:
+            self.reconciled = False
+            self._gone_odd.clear()
+            self.log("New day: checking positions and protective stops at Zerodha again")
         if self.s.mode != "live" or self.reconciled:
             return
         self._read_journal()
-        left = self.settle_working(None)
+        left = self.settle_working(now)
         if left:
             raise Halt("Orders sent before a restart are still working at Zerodha (" + "; ".join(left) + "). Nothing "
                        "more was sent.")
-        net = {}
-        for p in (self.kite.positions() or {}).get("net", []):
-            if p.get("exchange") == "NFO" and p.get("product") == "NRML":
-                net[p["tradingsymbol"]] = net.get(p["tradingsymbol"], 0) + int(p.get("quantity", 0))
+        net = self._zerodha_net()
         others = self.others() or {}
-        diffs = []
+        diffs, bad = [], set()
         for c, pos in self.positions.items():
+            if self._expired(c, day):
+                continue
             sym = self.symbol_of(c)
             other = others.get(sym, 0) if sym else 0
             if sym is None or net.get(sym, 0) != pos.qty + other:
+                bad.add(c)
                 diffs.append(f"{c.label}: ours {pos.qty}" + (f" + other live sessions {other}" if other else "")
                              + f", Zerodha {net.get(sym, 0) if sym else 'not listed'}")
+        self._renew_day_stops(day, skip=bad, tell=not diffs)
         if diffs:
+            naked = [c.label for c in self.positions if self.positions[c].qty < 0 and not self._expired(c, day)
+                     and (c.label not in self.protect or (self.protect_day.get(c.label) or "") < day)]
             raise Blocked("Positions differ from Zerodha (" + "; ".join(diffs) + "). Nothing was sent. "
-                       "Square off or fix them in Kite, reset this session's account, then start again.")
-        self.reconciled = True
-        try:   # a stop that is not in today's order book is gone (DAY orders end with the day)
-            today = {str(o.get("order_id")): str(o.get("status", "")).upper() for o in self.kite.orders() or []}
-        except Exception:  # noqa: BLE001 - unknown: keep them
-            today = None
-        for c in list(self.positions):          # a short leg whose stop was off when the engine stopped gets it back
-            sym = self.symbol_of(c)
-            oid = self.protect.get(c.label)
-            if oid and today is not None and today.get(oid, "CANCELLED") in ("CANCELLED", "REJECTED"):
-                self.log(f"Protective stop {oid} for {c.label} is no longer at Zerodha; placing a new one")
-                self.protect.pop(c.label, None)
-                level = self.protect_level.pop(c.label, None)
-                if level:
-                    self.released[c.label] = level
-            if sym:
-                self._reprotect(c, sym)
+                          + (f"NO protective stop at Zerodha: {', '.join(naked)}. " if naked else "")
+                          + "Square off or fix them in Kite, reset this session's account, then start again.")
+        self.reconciled, self.reconciled_on = True, day
+
+    def _renew_day_stops(self, day: str, skip=(), tell: bool = True) -> None:
+        """Stops not in today's order book: ended with an earlier day (or cancelled): place them again for the short
+        legs Zerodha still holds (`skip`: legs that did not match it). A stop placed today and not listed yet (the
+        order book can be a few seconds late) is kept."""
+        try:
+            book = {str(o.get("order_id")): str(o.get("status", "")).upper() for o in self.kite.orders() or []}
+        except Exception as e:  # noqa: BLE001 - unknown: keep them; the 30 s stop check reads them one by one
+            self._not_read(f"Order book not read ({e}); stops checked one by one later", "book")
+            book = None
+        for c in list(self.positions):
+            if c in skip or self._expired(c, day):
+                continue
+            label, oid = c.label, self.protect.get(c.label)
+            if oid and book is not None:
+                state = book.get(oid)
+                placed = self.protect_day.get(label)
+                if state is None and placed is None:      # saved before stops were dated: ask Zerodha for it
+                    try:
+                        state = str(self._order_last(oid, None, day).get("status", "")).upper()
+                    except Exception:  # noqa: BLE001 - cannot tell: keep it
+                        state = "UNKNOWN"
+                    if state not in ("GONE", "CANCELLED", "REJECTED"):
+                        self.protect_day[label] = day if state != "UNKNOWN" else ""
+                if state in ("CANCELLED", "REJECTED", "GONE") or (state is None and (placed or "") < day):
+                    self.log(f"Protective stop {oid} for {label} is no longer at Zerodha; placing a new one")
+                    self._drop_stop(label)
+            if c.label not in self.protect and self.positions[c].qty < 0:
+                self.renew.add(label)
+        self._renew_stops(tell)
 
     def _zerodha_net(self) -> dict:
         net = {}
@@ -367,6 +414,76 @@ class LiveBroker(PaperBroker):
                 return o
         return None
 
+    def _today(self, now=None) -> str:
+        """Today's date (IST) as text; also remembered so orders placed from here are dated."""
+        self._day = (now if hasattr(now, "date") else ist_now()).date().isoformat()
+        return self._day
+
+    GONE_WORDS = re.compile(r"couldn.?t find|not found|invalid order", re.I)
+
+    def _order_last(self, oid: str, placed_on: str | None = None, today: str | None = None) -> dict:
+        """The latest state of an order at Zerodha. GONE only for an order Zerodha no longer knows because it ended with
+        an earlier day (DAY orders): Kite must answer "Couldn't find that order_id", the order must not be dated today
+        (placed_on), and today's order book must not list it. If the book lists it, its state there is used. Any
+        other read error (a timeout, too many requests) is raised: an order placed today is never taken as gone."""
+        try:
+            return (self.kite.order_history(oid) or [{}])[-1]
+        except Exception as e:  # noqa: BLE001
+            if not self.GONE_WORDS.search(str(e)):
+                raise
+            if placed_on and today and placed_on >= today:
+                raise
+            try:
+                book = self.kite.orders() or []
+            except Exception:  # noqa: BLE001 - cannot tell: the first error stands
+                raise e from None
+            for o in book:
+                if str(o.get("order_id")) == str(oid):
+                    return dict(o)
+            return {"order_id": str(oid), "status": "GONE", "filled_quantity": 0}
+
+    def _not_read(self, msg: str, key: str | None = None) -> None:
+        """Log a check that could not be done, at most once a minute for each kind of message."""
+        key = key or msg[:40]
+        if _time.time() - self._read_err_at.get(key, 0.0) >= 60:
+            self._read_err_at[key] = _time.time()
+            self.log(msg)
+
+    def _expired(self, contract, day: str) -> bool:
+        return contract.expiry.isoformat() < day
+
+    GONE_CONFIRM = 20.0     # seconds a difference must last before a deferred check takes it as real
+
+    def _still_held(self, contract, defer: bool = False) -> bool:
+        """A short leg whose protective stop is gone with an earlier day: Zerodha must still hold exactly this leg
+        (net, less the other live sessions) before it is bought back or gets a new stop: the old stop may have
+        filled. Zerodha's positions can lag a fill by a moment, so a difference must be seen twice: read again after
+        2 s (defer: at later checks instead, returning False until it has lasted GONE_CONFIRM s). Then Blocked."""
+        pos, sym = self.positions.get(contract), self.symbol_of(contract)
+        if pos is None or not sym:
+            return True
+        for attempt in (1, 2):
+            held = self._zerodha_net().get(sym, 0) - (self.others() or {}).get(sym, 0)
+            if held == pos.qty:
+                self._gone_odd.pop(sym, None)
+                return True
+            if defer:
+                first = self._gone_odd.get(sym)
+                if first is None or _time.time() - first > self.GONE_CONFIRM + 90:   # an old one: start again
+                    first = self._gone_odd[sym] = _time.time()
+                if _time.time() - first < self.GONE_CONFIRM:
+                    self._not_read(f"{contract.label}: Zerodha shows {held:+d}, the session {pos.qty:+d}; checking again",
+                                   "odd " + sym)
+                    return False
+                break
+            if attempt == 2:
+                break
+            self.sleep(2)
+        self._gone_odd.pop(sym, None)
+        raise Blocked(f"{contract.label}: Zerodha holds {held:+d} for this session, the session {pos.qty:+d}, and its "
+                      "protective stop from an earlier day is no longer at Zerodha (it may have filled). Not bought "
+                      "back, so nothing can be doubled. Check Kite.")
+
     def _open_orders(self, sym: str) -> list:
         """Orders still working at Zerodha for this symbol, Algo Lab's own protective stops left out (any session's:
         they only trigger far away). Raises if they cannot be read."""
@@ -390,6 +507,13 @@ class LiveBroker(PaperBroker):
                         continue
                     oid = str(o.get("order_id"))
                     self._track(tag, oid=oid)
+                if str(self._order_last(oid, w.get("day"), self._today(now)).get("status")) == "GONE":
+                    self._track(tag, done=True)                       # an order of an earlier day
+                    msg = (f"Order {oid} ({w.get('side')} {w.get('qty')} {w.get('sym')}) is from an earlier day and no "
+                           "longer at Zerodha; any fill it had shows in the positions checked next")
+                    self.log(msg)
+                    self.notify("Algo Lab: order from an earlier day", msg)
+                    continue
                 last = self._confirm_cancel(oid, {})
             except Exception as e:  # noqa: BLE001
                 left.append(f"{w.get('label')}: order {oid or tag} not read ({e})")
@@ -417,20 +541,24 @@ class LiveBroker(PaperBroker):
             self._track(tag, done=True)
             if c is not None and c in self.positions:
                 if got > 0 and w.get("side") == "SELL":
-                    self._resize_protect(c, w.get("sym"))
+                    self._resize_protect(c, w.get("sym"), now)
                 self._reprotect(c, w.get("sym"))
         return left
 
-    def _resize_protect(self, contract, sym) -> None:
+    def _resize_protect(self, contract, sym, now=None) -> None:
         """A short leg that grew (a late fill) while it had a stop: replace the stop so it covers the whole leg."""
         if contract.label not in self.protect or self.s.mode != "live":
             return
+        n = len(self.fills)
+        whole = False
         try:
-            if self._cancel_protect(contract, ist_now()):
-                return
+            whole = self._cancel_protect(contract, now or ist_now())
         except Exception as e:  # noqa: BLE001 - a stop not confirmed gone stays; a read error: put one back if off
             self.notify("Protective stop not resized", f"{contract.label}: {e}")
-        self._reprotect(contract, sym)
+        if not whole:
+            self._reprotect(contract, sym)
+        if len(self.fills) > n:      # the old stop had filled (the market ran far): as a stop fill at a check
+            raise Halt(f"Protective stop filled at Zerodha for {contract.label}")
 
     def _touch(self, sym: str, side: str) -> tuple[float | None, float | None]:
         """The best price to trade against now (ask to buy, bid to sell; last price if that side is empty) and the
@@ -481,7 +609,8 @@ class LiveBroker(PaperBroker):
         Raises NotPlaced if Zerodha surely did not take it, Unconfirmed if it may still fill (it stays in `working`,
         on disk from before it is sent, so a restart finds it)."""
         tag = "algolab" + secrets.token_hex(3)
-        self._track(tag, sym=sym, side=side, qty=qty, label=label, group=group, oid="", booked=0)
+        self._track(tag, sym=sym, side=side, qty=qty, label=label, group=group, oid="", booked=0,
+                    day=self._day or ist_now().date().isoformat())
         try:
             oid = str(self.kite.place_order(variety="regular", exchange="NFO", tradingsymbol=sym, transaction_type=side,
                                             quantity=qty, product="NRML", order_type="LIMIT", price=price,
@@ -663,22 +792,117 @@ class LiveBroker(PaperBroker):
         return min(filled, qty), value / filled, oid
 
     def _place_protect(self, contract, sym, sold_px, qty, trigger: float | None = None) -> bool:
+        """Place the SL BUY that protects a short leg at Zerodha. Each stop has its own tag: if Zerodha's answer is lost
+        (a timeout), the order is looked up by its tag and adopted if it got there, so a stop is never placed twice.
+        While that cannot be told (the order book cannot be read), no other stop is placed for the leg."""
         if self.s.protect_mult <= 0:
             return False
+        label = contract.label
+        if label in self.pending_stop:    # an earlier placement whose answer was lost: find out first
+            try:
+                found = self._resolve_pending(label)
+            except Exception as e:  # noqa: BLE001 - cannot tell yet: no second stop
+                self._not_read(f"Protective stop for {label}: {e}; not placed again until that is known",
+                               "pending " + label)
+                self.renew.add(label)
+                return False
+            if found is not None and self._worth_keeping(found):
+                self._adopt_stop(contract, sym, found, trigger or sold_px * self.s.protect_mult)
+                self._fit_found(contract, sym, found, qty)
+                return True
         if trigger is None:
             trigger = sold_px * self.s.protect_mult
         trigger = round(math.ceil(round(trigger / self.tick, 6)) * self.tick, 2)
         limit = round(math.ceil(round(trigger * 1.1 / self.tick, 6)) * self.tick, 2)
+        tag = "algolab-stop" + secrets.token_hex(3)
         try:
             oid = self.kite.place_order(variety="regular", exchange="NFO", tradingsymbol=sym, transaction_type="BUY",
                                         quantity=qty, product="NRML", order_type="SL", price=limit,
-                                        trigger_price=trigger, validity="DAY", tag="algolab-stop")
-        except Exception as e:  # noqa: BLE001
-            self.notify("Protective stop NOT placed", f"{sym}: {e}. The short leg is unprotected at Zerodha.")
+                                        trigger_price=trigger, validity="DAY", tag=tag)
+        except Exception as e:  # noqa: BLE001 - it may still have reached Zerodha: look for it before anything else
+            found, unread = None, False
+            for n in range(self.LOOKUPS_AFTER_ERROR):
+                try:
+                    found = self._find_by_tag(tag)
+                    unread = False
+                except Exception:  # noqa: BLE001
+                    unread = True
+                if found is not None:
+                    break
+                if n < self.LOOKUPS_AFTER_ERROR - 1:
+                    self.sleep(self.LOOKUP_GAP)
+            if found is not None and self._worth_keeping(found):
+                self.log(f"Protective stop for {label}: placed although Zerodha answered with an error ({e})")
+                return self._adopt_stop(contract, sym, found, trigger)
+            if found is None:      # not listed (yet): kept until a later read rules it out, so it is never doubled
+                self.pending_stop[label] = {"tag": tag, "at": _time.time()}
+            self.renew.add(label)  # tried again at each check while the session runs
+            msg = (f"{sym}: {e}. The short leg is unprotected at Zerodha; Algo Lab tries again at each check while "
+                   "the session runs.")
+            self.log(f"Protective stop NOT placed: {msg}")
+            if ("noplace", label, self._day) not in self._told:      # once a day per leg (retries are logged)
+                self._told.add(("noplace", label, self._day))
+                self.notify("Protective stop NOT placed", msg)
             return False
-        self.protect[contract.label] = str(oid)
-        self.protect_level[contract.label] = trigger
+        self._adopt_stop(contract, sym, {"order_id": oid}, trigger)
         self.log(f"Protective stop {oid}: BUY {qty} {sym} trigger {trigger:.2f}")
+        return True
+
+    PENDING_FORGET = 60     # seconds after which a lost stop that today's order book does not list is ruled out
+
+    def _resolve_pending(self, label: str) -> dict | None:
+        """A stop whose placement answer was lost: its order if today's order book lists it now, else None. Raises
+        if the book cannot be read, or if it is too early to rule it out (the book can be seconds late): until then
+        the leg must be treated as if that stop may be live."""
+        p = self.pending_stop.get(label)
+        if not p:
+            return None
+        found = self._find_by_tag(p["tag"])                 # raises if the order book cannot be read
+        if found is not None:
+            del self.pending_stop[label]
+            return found
+        if _time.time() - float(p.get("at") or 0) < self.PENDING_FORGET:
+            raise Unknown(f"a protective stop sent {int(_time.time() - float(p.get('at') or 0))} s ago, whose answer was "
+                          "lost, may still show at Zerodha")
+        del self.pending_stop[label]
+        self.log(f"Protective stop for {label} whose answer was lost never reached Zerodha")
+        return None
+
+    def _cancel_found(self, oid: str, order: dict) -> str:
+        """Cancel a stop at Zerodha that protects nothing the session holds (it could open a position). Returns what
+        happened, for the message."""
+        if str(order.get("status", "")).upper() in self.FINISHED:
+            return f"Its protective stop {oid} is {str(order.get('status')).lower()} at Zerodha."
+        last = self._confirm_cancel(oid, order)
+        if str(last.get("status", "")).upper() == "CANCELLED" and not int(last.get("filled_quantity") or 0):
+            self.protect = {k: v for k, v in self.protect.items() if v != oid}
+            return f"Its protective stop {oid} was cancelled at Zerodha."
+        return (f"Its protective stop {oid} is {str(last.get('status') or 'unknown').lower()} at Zerodha: cancel it in "
+                "Kite (it could open a position).")
+
+    @staticmethod
+    def _worth_keeping(order: dict) -> bool:
+        """A stop found at Zerodha is tracked unless it ended without buying anything (one that filled, even in part,
+        must be booked by the stop check, which then stops the session)."""
+        return (str(order.get("status", "")).upper() not in ("REJECTED", "CANCELLED")
+                or int(order.get("filled_quantity") or 0) > 0)
+
+    def _fit_found(self, contract, sym, order: dict, qty: int) -> None:
+        """A stop found after its answer was lost may be for an older size of the leg (sold more since): resized."""
+        size = int(order.get("quantity") or 0)
+        if size and size != qty and str(order.get("status", "")).upper() not in self.FINISHED:
+            self.log(f"Protective stop {order.get('order_id')} for {contract.label} is for {size}, the leg is {qty}: "
+                     "replaced for the whole leg")
+            self._resize_protect(contract, sym)
+
+    def _adopt_stop(self, contract, sym, order: dict, trigger: float) -> bool:
+        label = contract.label
+        self._not_held.discard(label)
+        self.protect[label] = str(order.get("order_id"))
+        self.protect_level[label] = float(order.get("trigger_price") or trigger)
+        self._follow_n.pop(label, None)              # a new order: it may be moved again (trailing)
+        self.protect_day[label] = self._day or ist_now().date().isoformat()
+        self.renew.discard(label)
         return True
 
     def _reprotect(self, contract, sym) -> None:
@@ -731,25 +955,51 @@ class LiveBroker(PaperBroker):
         self._follow_n[label] = self._follow_n.get(label, 0) + 1
         self.log(f"Protective stop {self.protect[label]}: trigger moved to {trig:.2f} (trailing)")
 
+    def _drop_stop(self, label: str, keep_level: bool = True) -> None:
+        """Forget a stop that is no longer at Zerodha; its trigger is kept for the one placed again (_reprotect)."""
+        self.protect.pop(label, None)
+        self.protect_day.pop(label, None)
+        level = self.protect_level.pop(label, None)
+        if keep_level and level is not None:
+            self.released[label] = level
+
     def _cancel_protect(self, contract, now) -> bool:
         """Before buying a leg back: cancel its protective stop and wait until Zerodha confirms it is gone.
         True if the stop already bought the whole leg back. A stop that filled in part is booked first, so the
         buy-back covers only the rest. If the stop cannot be confirmed gone, nothing is bought (a second buy could
         flip the leg long): the stop stays on the books and CancelFailed is raised."""
+        if contract.label in self.pending_stop and self.s.mode == "live":   # a stop whose answer was lost may be live
+            try:
+                found = self._resolve_pending(contract.label)
+            except Exception as e:  # noqa: BLE001
+                msg = (f"{contract.label}: {e}. The leg was NOT bought back, so it cannot be bought twice; check Kite "
+                       "for an SL order tagged algolab-stop.")
+                self.notify("Protective stop not known", msg)
+                raise CancelFailed(msg) from None
+            if found is not None:
+                self._adopt_stop(contract, self.symbol_of(contract), found, float(found.get("trigger_price") or 0))
         oid = self.protect.get(contract.label)
         if not oid or self.s.mode != "live":
             self.protect.pop(contract.label, None)
             self.protect_level.pop(contract.label, None)
             return False
-        last = (self.kite.order_history(oid) or [{}])[-1]
+        last = self._order_last(oid, self.protect_day.get(contract.label), self._today(now))
         status = str(last.get("status", "")).upper()
+        if status == "GONE":          # a DAY stop of an earlier day: not at Zerodha, nothing to cancel
+            self.log(f"Protective stop {oid} for {contract.label} is from an earlier day and no longer at Zerodha")
+            self._still_held(contract)          # it may have filled: then buying back would open a long position
+            self._drop_stop(contract.label)
+            return False
         if status not in ("COMPLETE", "CANCELLED", "REJECTED"):
             try:
                 self.kite.cancel_order(variety="regular", order_id=oid)
             except Exception as e:  # noqa: BLE001 - it may have filled meanwhile: read it again below
                 self.log(f"Cancel of protective stop {oid} failed: {e}")
             for _ in range(self.CANCEL_CONFIRM_TRIES):
-                last = (self.kite.order_history(oid) or [{}])[-1]
+                try:
+                    last = (self.kite.order_history(oid) or [last])[-1]
+                except Exception as e:  # noqa: BLE001 - not known yet: read again
+                    self.log(f"Protective stop {oid}: status not read: {e}")
                 status = str(last.get("status", "")).upper()
                 if status in ("COMPLETE", "CANCELLED", "REJECTED"):
                     break
@@ -760,10 +1010,7 @@ class LiveBroker(PaperBroker):
                    "its stop is still at Zerodha. Check Kite.")
             self.notify("Protective stop not cancelled", msg)
             raise CancelFailed(msg)
-        self.protect.pop(contract.label, None)
-        level = self.protect_level.pop(contract.label, None)
-        if level is not None and status == "CANCELLED":
-            self.released[contract.label] = level
+        self._drop_stop(contract.label, keep_level=status == "CANCELLED")
         filled = int(last.get("filled_quantity") or 0)
         if status == "COMPLETE" or filled:
             pos = self.positions.get(contract)
@@ -781,16 +1028,35 @@ class LiveBroker(PaperBroker):
         Returns what needs a look in Kite: stops that could not be cancelled, and stops that filled (fully or partly)
         while the session held nothing, which leaves an extra position at Zerodha. Each entry names the order id."""
         problems = []
-        for label, oid in list(self.protect.items()):
-            if self.s.mode != "live" or not oid:
-                self.protect.pop(label, None)
-                self.protect_level.pop(label, None)
+        for label in list(self.pending_stop):          # a stop whose answer was lost: find it to cancel it
+            if self.s.mode != "live":
+                self.pending_stop.pop(label, None)
                 continue
             try:
-                last = (self.kite.order_history(oid) or [{}])[-1]
+                found = self._resolve_pending(label)
+            except Exception as e:  # noqa: BLE001
+                problems.append(f"a protective stop for {label} (tag {self.pending_stop[label]['tag']}) may be at "
+                                f"Zerodha ({e}): cancel it in Kite")
+                continue
+            if found is not None:
+                self.protect[label] = str(found.get("order_id"))
+        for label, oid in list(self.protect.items()):
+            if self.s.mode != "live" or not oid:
+                self._drop_stop(label, keep_level=False)
+                continue
+            try:
+                last = self._order_last(oid, self.protect_day.get(label), self._today(now))
                 status = str(last.get("status", "")).upper()
                 filled = int(last.get("filled_quantity") or 0)
-                if status not in ("COMPLETE", "REJECTED", "CANCELLED"):
+                c = self.contracts.get(label)
+                sym = self.symbol_of(c) if c is not None else None
+                if status == "GONE" and sym:     # ended with its day: it may have filled then, with nothing held
+                    held = self._zerodha_net().get(sym, 0) - (self.others() or {}).get(sym, 0)
+                    if held:
+                        problems.append(f"Zerodha holds {held:+d} {sym} that this session does not (its protective "
+                                        f"stop {oid} of an earlier day may have filled)")
+                        self.notify("Position at Zerodha not held by the session", problems[-1])
+                if status not in ("COMPLETE", "REJECTED", "CANCELLED", "GONE"):
                     self.kite.cancel_order(variety="regular", order_id=oid)
                     self.log(f"Protective stop {oid} for {label} cancelled (session stopped with no positions)")
                 if filled:
@@ -801,8 +1067,7 @@ class LiveBroker(PaperBroker):
                 self.log(f"Cancel of protective stop {oid} failed: {e}")
                 problems.append(f"protective stop {oid} for {label} could not be cancelled ({e}): cancel it in Kite")
                 continue
-            self.protect.pop(label, None)
-            self.protect_level.pop(label, None)
+            self._drop_stop(label, keep_level=False)
         return problems
 
     def _record_stop(self, contract, last, now) -> None:
@@ -815,34 +1080,144 @@ class LiveBroker(PaperBroker):
         self._apply(now, contract, "BUY", qty, px, cost, "Protective stop at Zerodha", pos.group, "live")
 
     def check_protective_stops(self, now, from_stream: bool = False) -> None:
-        """A protective stop that filled means the market ran far: record it and stop the session.
-        from_stream: only look at order updates already received on the price stream (no request)."""
-        if self.s.mode != "live" or not self.protect:
+        """A protective stop that filled (fully, or in part before it was cancelled) means the market ran far: record
+        it and stop the session. A stop gone with an earlier day (a leg held overnight) is placed again, once Zerodha
+        is seen to still hold the leg. A read that fails is logged and tried at the next check: never raised, so the
+        strategy (and its exits) keeps running. from_stream: only look at order updates already received on the price
+        stream (no request)."""
+        if not from_stream:
+            self.stop_reads_failed = 0
+        if self.s.mode != "live" or not (self.protect or self.renew or self.pending_stop):
             return
         if from_stream and self.stream is None:
             return
-        hit = []
+        day = self._today(now)
+        hit, gone = [], []
+        if not from_stream:
+            for label in list(self.pending_stop):     # stops whose answer was lost: found ones are read below like any
+                c = next((c for c in self.positions if c.label == label), None)       # other (booked if they filled)
+                try:
+                    found = self._resolve_pending(label)
+                except Exception:  # noqa: BLE001 - not known yet: the next check
+                    continue
+                if found is not None and self._worth_keeping(found) and c is not None:
+                    self._adopt_stop(c, self.symbol_of(c), found, float(found.get("trigger_price") or 0))
+                    self._fit_found(c, self.symbol_of(c), found, abs(self.positions[c].qty))
+                elif found is not None and c is None:     # no leg to protect: it must not stay live
+                    msg = f"{label}: " + self._cancel_found(str(found.get("order_id")), found)
+                    if int(found.get("filled_quantity") or 0):
+                        msg += f" It bought {found.get('filled_quantity')}: an extra position may be open at Zerodha."
+                    self.log(msg)
+                    if "cancel it in Kite" in msg or "extra position" in msg:
+                        self.notify("Protective stop for no leg", msg)
         for label, oid in list(self.protect.items()):
+            c = next((c for c in self.positions if c.label == label), None)
+            if c is not None and self._expired(c, day):
+                self._drop_stop(label, keep_level=False)       # expired: settled, nothing at Zerodha to protect
+                continue
             if from_stream:
                 last = self.stream.order(oid)
                 if not last:
                     continue
             else:
-                last = (self.kite.order_history(oid) or [{}])[-1]
+                try:
+                    last = self._order_last(oid, self.protect_day.get(label), day)
+                except Exception as e:  # noqa: BLE001 - a missed read must never stop the strategy (its exits)
+                    self._not_read(f"Protective stop {oid} for {label} not read: {e}", "stop " + label)
+                    self.stop_reads_failed += 1
+                    continue
             status = str(last.get("status", "")).upper()
-            if status == "COMPLETE":
-                c = next((c for c in self.positions if c.label == label), None)
+            filled = int(last.get("filled_quantity") or 0)
+            if status == "GONE":
+                gone.append((label, oid, c))
+            elif status == "COMPLETE" or (status in ("REJECTED", "CANCELLED") and filled):
                 if c is not None:
-                    self._record_stop(c, last, now)
-                self.protect.pop(label, None)
-                self.protect_level.pop(label, None)
+                    pos = self.positions[c]
+                    self._record_stop(c, {**last, "filled_quantity": min(filled or abs(pos.qty), abs(pos.qty))}, now)
+                self._drop_stop(label, keep_level=False)
                 hit.append(label)
             elif status in ("REJECTED", "CANCELLED"):
-                self.protect.pop(label, None)
-                self.protect_level.pop(label, None)
+                self._drop_stop(label, keep_level=False)
                 self.notify("Protective stop gone", f"{label}: Zerodha shows it {status.lower()}. The leg is unprotected.")
-        if hit:
+        if hit:      # first: the session squares off (each leg's stop is read again there, gone ones included)
             raise Halt("Protective stop filled at Zerodha for " + ", ".join(hit))
+        if from_stream:
+            return
+        for label, oid, c in gone:
+            if c is None:                                       # no leg: nothing to protect
+                self._drop_stop(label, keep_level=False)
+                continue
+            try:
+                if not self._still_held(c, defer=True):         # Zerodha's positions may lag: decided at the next check
+                    continue
+            except Blocked:
+                raise
+            except Exception as e:  # noqa: BLE001 - kept as it is: tried again at the next check
+                self._not_read(f"Protective stop {oid} for {label} is from an earlier day; positions not read: {e}",
+                               "gone " + label)
+                continue
+            self.log(f"Protective stop {oid} for {label} is from an earlier day and no longer at Zerodha; placing a new one")
+            self._drop_stop(label)
+            self.renew.add(label)
+        self.renew |= {label for label in self.pending_stop
+                       if label not in self._not_held and any(c.label == label for c in self.positions)}
+        self._renew_stops()
+
+    def _renew_stops(self, tell: bool = True) -> None:
+        """Short legs whose stop must be placed again: try now (at each check, and at each closing-only retry). Zerodha
+        must still hold the leg first (seen twice if not: then dropped, with an alert: the session's position check
+        stops it). tell: alert once if it cannot be placed yet (False when the session is about to stop)."""
+        day = self._day or ist_now().date().isoformat()
+        for label in sorted(self.renew):
+            c = next((c for c in self.positions if c.label == label), None)
+            if c is None or self.positions[c].qty >= 0 or label in self.protect or self._expired(c, day):
+                self.renew.discard(label)
+                continue
+            sym = self.symbol_of(c)
+            if not sym:
+                continue
+            try:
+                if not self._still_held(c, defer=True):
+                    continue                              # positions may lag: read again at the next try
+            except Blocked as e:
+                self.renew.discard(label)
+                self._not_held.add(label)
+                extra = ""
+                if label in self.pending_stop:          # a stop whose answer was lost: kept (and named) if found
+                    try:
+                        found = self._resolve_pending(label)
+                    except Exception:  # noqa: BLE001
+                        found, extra = None, (f" A protective stop (tag {self.pending_stop[label]['tag']}) may be at "
+                                              "Zerodha: cancel it in Kite (it could open a position).")
+                    if found is not None:
+                        self._adopt_stop(c, sym, found, float(found.get("trigger_price") or 0))
+                        extra = " " + self._cancel_found(str(found.get("order_id")), found)
+                raise Blocked(f"{e}{extra} No stop was placed again; the session stops without trading.") from None
+            except Exception as e:  # noqa: BLE001 - positions not read: the next try
+                self._not_read(f"Protective stop for {label}: positions not read ({e}); placed at the next try",
+                               "renew " + label)
+                continue
+            try:
+                self._reprotect(c, sym)
+            except Halt:
+                raise                                     # e.g. the old stop filled while it was resized
+            except Exception as e:  # noqa: BLE001
+                self._not_read(f"Protective stop for {label} not placed yet: {e}", "renew " + label)
+            if label in self.protect:
+                self.renew.discard(label)
+            elif tell and ("renew", label, day) not in self._told:
+                self._told.add(("renew", label, day))
+                self.notify("Protective stop NOT renewed", f"{label}: its protective stop could not be placed yet. The "
+                            "short leg is unprotected at Zerodha; Algo Lab tries again at every check (30 s) while the "
+                            "session runs.")
+
+    def _protect_sold(self, contract, sym, avg, now=None) -> None:
+        """After a sale: one stop for the whole short leg. A leg that already had one (sold more of it) gets it
+        replaced for the new size, never a second stop next to it (two could buy it back twice)."""
+        if contract.label in self.protect:
+            self._resize_protect(contract, sym, now)
+        if contract.label not in self.protect and contract in self.positions and self.positions[contract].qty < 0:
+            self._place_protect(contract, sym, avg, abs(self.positions[contract].qty))
 
     def _book_unconfirmed(self, now, contract, side, e, reason, group, sym, closing) -> None:
         if e.filled:
@@ -851,9 +1226,7 @@ class LiveBroker(PaperBroker):
         if closing:
             self._reprotect(contract, sym)          # skipped while the buy may still fill
         elif side == "SELL" and e.filled:
-            self._resize_protect(contract, sym)     # a leg that already had a stop
-            if contract.label not in self.protect:
-                self._place_protect(contract, sym, e.avg, abs(self.positions[contract].qty))
+            self._protect_sold(contract, sym, e.avg, now)
         self.notify("Order not confirmed at Zerodha", f"{contract.label}: {e}")
 
     def execute(self, now, contract, side, qty, quote, reason="", group="", retry=False):
@@ -871,7 +1244,7 @@ class LiveBroker(PaperBroker):
             return super().execute(now, contract, side, qty, quote, reason, group)
         if self.kite is None:
             raise Halt("No Zerodha connection.")
-        self.reconcile()
+        self.reconcile(now)
         if closing and side == "BUY":
             if self._cancel_protect(contract, now):
                 return self.fills[-1]      # the protective stop already bought it back
@@ -896,7 +1269,7 @@ class LiveBroker(PaperBroker):
         if filled < qty:
             raise Halt(f"Only {filled} of {qty} {sym} filled.")
         if side == "SELL" and not closing:
-            self._place_protect(contract, sym, avg, filled)
+            self._protect_sold(contract, sym, avg, now)
         return fill
 
     def execute_many(self, now, items):
@@ -919,18 +1292,30 @@ class LiveBroker(PaperBroker):
                 self.orders_today["n"] += 1
             self.contracts[contract.label] = contract
             plan.append((contract, side, qty, quote, reason, group, sym, closing))
-        self.reconcile()
+        self.reconcile(now)
+        day = self._today(now)
+        for contract, side, qty, quote, reason, group, sym, closing in plan:   # before any stop is taken off: a
+            oid = self.protect.get(contract.label)                              # leg whose stop ended with an earlier
+            if closing and side == "BUY" and oid:                               # day must still be held at Zerodha
+                if str(self._order_last(oid, self.protect_day.get(contract.label), day).get("status")) == "GONE":
+                    self._still_held(contract)
         fills: list = [None] * len(plan)
-        todo = []
-        for i, (contract, side, qty, quote, reason, group, sym, closing) in enumerate(plan):
-            if closing and side == "BUY":
-                if self._cancel_protect(contract, now):
-                    fills[i] = self.fills[-1]   # the protective stop already bought it back
-                    continue
-                left = abs(self.positions[contract].qty)
-                if left < qty:                  # a stop that filled in part leaves less to buy
-                    plan[i] = (contract, side, left, quote, reason, group, sym, closing)
-            todo.append(i)
+        todo, off = [], []
+        try:
+            for i, (contract, side, qty, quote, reason, group, sym, closing) in enumerate(plan):
+                if closing and side == "BUY":
+                    if self._cancel_protect(contract, now):
+                        fills[i] = self.fills[-1]   # the protective stop already bought it back
+                        continue
+                    off.append((contract, sym))
+                    left = abs(self.positions[contract].qty)
+                    if left < qty:                  # a stop that filled in part leaves less to buy
+                        plan[i] = (contract, side, left, quote, reason, group, sym, closing)
+                todo.append(i)
+        except BaseException:
+            for contract, sym in off:               # stops already taken off for this exit: put them back
+                self._reprotect(contract, sym)
+            raise
         from concurrent.futures import ThreadPoolExecutor
         results: dict = {}
         with ThreadPoolExecutor(max_workers=max(1, len(todo))) as pool:
@@ -948,7 +1333,10 @@ class LiveBroker(PaperBroker):
             if isinstance(r, BaseException):
                 first_error = first_error or r
                 if isinstance(r, Unconfirmed):
-                    self._book_unconfirmed(now, contract, side, r, reason, group, sym, closing)
+                    try:
+                        self._book_unconfirmed(now, contract, side, r, reason, group, sym, closing)
+                    except Halt as e:
+                        first_error = first_error or e
                 elif closing:
                     self._reprotect(contract, sym)
                 continue
@@ -963,7 +1351,10 @@ class LiveBroker(PaperBroker):
             if filled < qty:
                 first_error = first_error or Halt(f"Only {filled} of {qty} {sym} filled.")
             if side == "SELL" and not closing:
-                self._place_protect(contract, sym, avg, filled)
+                try:
+                    self._protect_sold(contract, sym, avg, now)
+                except Halt as e:
+                    first_error = first_error or e
         if first_error is not None:
             raise first_error
         return fills
@@ -985,7 +1376,13 @@ class LiveBroker(PaperBroker):
             return self.execute(now, contract, "BUY" if pos.qty < 0 else "SELL", abs(pos.qty), quote, reason, pos.group)
         if self.kite is None:
             raise Halt("No Zerodha connection.")
+        day = self._today(now)
+        if self.reconciled_on != day:   # a new day: stops gone with the old one are placed again first
+            self._renew_day_stops(day, skip={contract})
+        else:
+            self._renew_stops()         # closing only: stops still to be placed again are tried at each retry
         self.reconciled = True          # the per-symbol check below replaces the whole-account one here
+        self.reconciled_on = day
         sym = self.symbol_of(contract)
         left = self.settle_working(now, contract.label)
         if left:

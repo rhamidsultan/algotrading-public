@@ -2,7 +2,7 @@
 left open with "close these in Kite now"). A closing order is re-sent further through the market, never while an
 earlier order may still fill; a leg that still cannot be closed gets its protective stop back and the session keeps
 retrying, sending only what Zerodha still holds."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -344,7 +344,7 @@ def test_an_order_in_flight_at_a_restart_is_found_and_the_stop_comes_back(tmp_pa
     b2, _ = _live_broker(book)
     b2.journal = b.journal
     b2.load_dict(state)
-    b2.reconcile()
+    b2.reconcile(NOW)
     assert b2.positions[c].qty == -25 and not b2.working
     assert b2.protect.get(c.label) and book.sent("SL")[-1]["qty"] == 25
 
@@ -473,7 +473,7 @@ def test_a_stop_from_an_earlier_day_is_replaced_at_start():
     book.orders.pop(b.protect[c.label])        # yesterday's DAY stop: not in today's order book
     b2, _ = _live_broker(book)
     b2.load_dict(state)
-    b2.reconcile()
+    b2.reconcile(NOW + timedelta(days=1))      # the next morning (before the leg's expiry)
     new = book.sent("SL")[-1]
     assert b2.protect[c.label] == new["order_id"] and new["trigger"] == pytest.approx(59.7) and new["qty"] == 65
 
