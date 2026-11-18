@@ -953,6 +953,9 @@ def api_reset():
         return jsonify(error="No such session."), 404
     if _age(x["beat"]) < 15 or x["desired"].exists():
         return jsonify(error="Stop the session first."), 400
+    state = _json(x["state"]) or {}
+    if state.get("mode") == "live" and state.get("positions"):   # it would forget legs Zerodha still holds
+        return jsonify(error="This live session still has open positions: Resume it, or square them off in Kite and Sync."), 400
     for f in (x["state"], x["equity"]):
         f.unlink(missing_ok=True)
     return jsonify(ok=True)
@@ -5603,8 +5606,14 @@ async function act(kind, id, btn) {
   try {
     if (kind === "resume") {
       const x = last.sessions.find(s => s.id === id), s = x.session;
-      if ((s.mode || "paper") === "live") { alert("To restart live trading, start it again from the form below (it asks you to confirm)."); btn.disabled = false; return; }
-      await post("/api/paper/start", {id, strategy: s.strategy, feed: s.feed, params: s.params, mode: s.mode || "paper", live: s.live, label: x.label, risk: s.risk || (x.desired || {}).risk, preset: (x.desired || {}).preset || s.preset});
+      let confirm = "";
+      if ((s.mode || "paper") === "live") {   // the same session: its positions, P&L and stops carry on (checked with Zerodha first)
+        const n = (s.positions || []).length;
+        confirm = (prompt(`Resume LIVE: real orders. ${n ? n + " open leg" + (n > 1 ? "s are" : " is") + " checked with Zerodha, then the strategy carries on" : "The strategy carries on"} with this session's account. Type LIVE to confirm.`) || "").trim();
+        if (confirm.toUpperCase() !== "LIVE") { btn.disabled = false; if (confirm) flash("Not resumed: type LIVE to confirm."); return; }
+      }
+      await post("/api/paper/start", {id, strategy: s.strategy, feed: s.feed, params: s.params, mode: s.mode || "paper", live: s.live, label: x.label, risk: s.risk || (x.desired || {}).risk, preset: (x.desired || {}).preset || s.preset, confirm});
+      if (confirm) flash("Resuming LIVE: it checks Zerodha first.");
     } else if (kind === "sync") {
       const j = await post("/api/paper/sync", {id});
       flash(j.started ? "Syncing with Zerodha: it reads Kite, sends no trades and stops again in a moment." : "Syncing with Zerodha now.");
@@ -5629,7 +5638,8 @@ function sessionCard(x) {
           ? ibtn("kill", "stop", "Stop (no open positions)", mode === "paper" ? "" : "danger", armedK ? "Tap again to stop" : "")
           : ibtn("kill", "squareoff", "Close all positions and stop", mode === "paper" ? "" : "danger", armedK ? "Tap again to square off" : ""))
          + (mode === "paper" ? ibtn("stop", "stop", "Stop (keep positions)", "danger") : ""))
-    : (s ? ibtn("resume", "play", "Resume", "pri") + ibtn("reset", "reset", "Reset account", "", armedR ? "Tap again to clear" : "") : "")
+    : (s ? ibtn("resume", "play", mode === "live" ? "Resume LIVE with this account (asks you to type LIVE)" : "Resume", "pri")
+         + (mode === "live" && (s.positions || []).length ? "" : ibtn("reset", "reset", "Reset account", "", armedR ? "Tap again to clear" : "")) : "")
       + ibtn("delete", "trash", "Delete session", "", armedD ? "Tap again to delete" : "");
   const syncBtn = mode === "live" && s && !x.killing && !(d.sync_only)
     ? ibtn("sync", "sync", "Sync with Zerodha: book legs you squared off in Kite") : "";
