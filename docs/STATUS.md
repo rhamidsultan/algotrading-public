@@ -3,6 +3,15 @@
 Update this in every pull request that changes what is live, data coverage or work in progress.
 Newest information first within each section.
 
+
+## Updates come from the public repo (18 Nov 2026, pull request "updates-from-public")
+
+- GitHub Actions stopped running on the private repo (billing), so work moved to this public repo (main = snapshot
+  of private main 77d1fae, no history). The server's Update now is switched to it once, by a one-line
+  `deploy/UPDATE_FROM` in the private repo; from then on it pulls `main` from here over https, no key.
+- `deploy/update_source.sh` (run by every update) records `update_repo` (public, https) and `repo` (deploy key: the
+  IBKR snapshot, still from the private repo's `ibkr-snapshot` branch, and updates from a private repo). The server's
+  copy follows a new update address (`git remote set-url`).
 ## Positions page (29 Oct 2026, pull request "positions-page")
 
 - Live › Positions (`/positions`, owner only, `server/portfolio/positions_panel.py`): open Zerodha positions with live

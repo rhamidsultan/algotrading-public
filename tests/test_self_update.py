@@ -125,8 +125,8 @@ def test_quiet_check_records_what_is_waiting_and_keeps_the_last_message(tmp_path
     assert s["behind"] == 1 and s["pending"][0].endswith("second version")
     assert s["status"] == "updated" and s["message"] == msg     # the last update's result is still what it says
     before = (engine / "runtime" / "self-update.json").read_text()
-    _git(tmp_path / "home" / "src", "remote", "set-url", "origin", str(tmp_path / "nowhere.git"))
-    assert _run(env, "peek").returncode == 0                     # GitHub out of reach: nothing written, no error shown
+    (tmp_path / "github.git").rename(tmp_path / "away.git")      # GitHub out of reach: nothing written, no error shown
+    assert _run(env, "peek").returncode == 0
     assert (engine / "runtime" / "self-update.json").read_text() == before
 
 
@@ -172,3 +172,29 @@ def test_update_status_for_the_menu_summary_and_profile(tmp_path, monkeypatch):
 def test_update_installs_the_30_minute_github_check():
     s = (ROOT / "deploy" / "update_engine.sh").read_text()
     assert "algolab-selfupdate-check.timer" in s and "ExecStart=$SELF/self_update.sh peek" in s and "OnUnitActiveSec=30min" in s
+
+
+def test_updates_move_to_another_repo(tmp_path):
+    """The server's copy follows a new update address (a public copy with its own history), not its old remote."""
+    work, engine, env = _setup(tmp_path)
+    env = {k: v for k, v in env.items() if k != "SELF_UPDATE_REPO"}
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "repo").write_text(str(tmp_path / "github.git") + "\n")   # the private repo (also the IBKR snapshot's)
+    assert _run(env, "update").returncode == 0
+    assert (tmp_path / "deployed.txt").read_text() == "1"
+    other = tmp_path / "public-work"
+    other.mkdir()
+    _git(other, "init", "-q", "-b", "main")
+    (other / "a.txt").write_text("public copy")
+    _git(other, "add", "."); _git(other, "commit", "-qm", "snapshot without history")
+    _git(tmp_path, "clone", "-q", "--bare", str(other), str(tmp_path / "public.git"))
+    (home / "update_repo").write_text(str(tmp_path / "public.git") + "\n")   # written by update_source.sh
+    r = _run(env, "check")
+    assert r.returncode == 0, r.stdout + r.stderr
+    s = _state(engine)
+    assert s["latest_subject"] == "snapshot without history" and s["behind"] == 1
+    assert _run(env, "update").returncode == 0
+    assert (tmp_path / "deployed.txt").read_text() == "public copy"
+    assert _git(home / "src", "remote", "get-url", "origin") == str(tmp_path / "public.git")
+    assert (home / "repo").read_text().strip() == str(tmp_path / "github.git")   # the snapshot's repo is untouched

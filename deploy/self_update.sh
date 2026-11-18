@@ -12,8 +12,11 @@
 set -uo pipefail
 ENGINE="${ENGINE_DIR:-/opt/algolab}"
 HOME_DIR="${SELF_UPDATE_HOME:-/opt/algo-trading}"
-# which GitHub repo: written by update_engine.sh into $HOME_DIR/repo (from the Mac's git remote or the repo copy)
-REPO_URL="${SELF_UPDATE_REPO:-$(cat "${SELF_UPDATE_HOME:-/opt/algo-trading}/repo" 2>/dev/null || true)}"
+# which GitHub repo: written by update_engine.sh (deploy/update_source.sh) into $HOME_DIR/update_repo (a public repo,
+# read over https without a key) or $HOME_DIR/repo (read with the deploy key)
+REPO_URL="${SELF_UPDATE_REPO:-$(cat "${SELF_UPDATE_HOME:-/opt/algo-trading}/update_repo" 2>/dev/null \
+                               || cat "${SELF_UPDATE_HOME:-/opt/algo-trading}/repo" 2>/dev/null || true)}"
+REPO_URL="$(echo "$REPO_URL" | tr -d ' \r\n')"
 [ -n "$REPO_URL" ] || REPO_URL="$(git -C "${SELF_UPDATE_HOME:-/opt/algo-trading}/src" remote get-url origin 2>/dev/null || true)"
 BRANCH="${SELF_UPDATE_BRANCH:-main}"
 SRC="$HOME_DIR/src"
@@ -94,6 +97,9 @@ if [ ! -d "$SRC/.git" ]; then
     fi
     exit 1
   fi
+fi
+if [ "$(git -C "$SRC" remote get-url origin 2>/dev/null)" != "$REPO_URL" ]; then   # moved to another repo
+  git -C "$SRC" remote set-url origin "$REPO_URL"
 fi
 if ! out="$(git -C "$SRC" fetch -q origin "$BRANCH" 2>&1)"; then
   [ "$ACTION" = peek ] && exit 0               # GitHub unreachable for a moment: try again next time
