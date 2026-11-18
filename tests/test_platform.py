@@ -951,7 +951,7 @@ def test_protective_stop_fill_and_mismatch_are_caught():
     b, e = _live_broker(k)
     c = Contract("NIFTY", e, 24300, "CE")
     b.execute(NOW, c, "SELL", 65, Quote(20.0, bid=19.9, ask=20.1), "Entry", "g")
-    b.reconcile()   # matches Zerodha
+    b.reconcile(NOW)   # matches Zerodha
     sl = k.sent("SL")[0]
     sl.update(status="COMPLETE", filled_quantity=65, average_price=61.0)
     with pytest.raises(Halt, match="Protective stop filled"):
@@ -961,7 +961,7 @@ def test_protective_stop_fill_and_mismatch_are_caught():
     b3, _ = _live_broker(FakeOrders(date(2026, 10, 13)))
     b3._apply(NOW, c, "SELL", 65, 20.0, 0.0, "Entry", "g", "live")
     with pytest.raises(Blocked, match="differ from Zerodha"):
-        b3.reconcile()
+        b3.reconcile(NOW)
 
 
 def test_shadow_session_sends_nothing_and_kill_squares_off(tmp_path, monkeypatch):
@@ -1460,14 +1460,14 @@ def test_live_sessions_holding_the_same_contract_reconcile_against_their_sum():
     a2, _ = _live_broker(k)
     a2.load_dict(json.loads(json.dumps(a.to_dict())))
     with pytest.raises(Blocked, match="ours -65, Zerodha -130"):
-        a2.reconcile()             # alone it looks wrong
+        a2.reconcile(NOW)             # alone it looks wrong
     a2.others = lambda: {"NIFTY26O1324300CE": -65}
-    a2.reconcile()                 # with the other live session's -65 it matches
+    a2.reconcile(NOW)                 # with the other live session's -65 it matches
     a3, _ = _live_broker(k)
     a3.load_dict(json.loads(json.dumps(a.to_dict())))
     a3.others = lambda: {"NIFTY26O1324300CE": -130}
     with pytest.raises(Blocked, match="other live sessions -130"):
-        a3.reconcile()
+        a3.reconcile(NOW)
     # each session has its own protective stop for its own 65
     assert len(k.sent("SL")) == 2 and all(o["qty"] == 65 for o in k.sent("SL"))
 

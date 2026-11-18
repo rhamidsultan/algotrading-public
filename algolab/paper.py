@@ -291,6 +291,7 @@ class Session:
         self._kill_noted = False
         self._stops_checked = 0.0
         self._positions_checked = _time.time()   # the start-of-session reconcile covers the first minute
+        self._failing: dict = {}         # kind of Zerodha check -> (failing since, alert sent)
         if self.mode != "paper":
             self._log(f"Session in {self.mode.upper()} mode: max {self.live.max_lots} lot(s) per order, "
                       f"daily loss limit Rs {self.live.daily_loss_limit:,.0f}, protective stops "
@@ -325,15 +326,43 @@ class Session:
                 kill.unlink(missing_ok=True)
                 raise Halt("Stopped from the dashboard")
             if self.mode == "live":
-                self.broker.reconcile()
-                if _time.time() - self._stops_checked >= 30:
+                try:      # cannot check Zerodha (positions, stops) just now: nothing is sent this moment
+                    self.broker.reconcile(now)
+                    self._zerodha_ok("reconcile")
+                except Halt:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    self._zerodha_failing("reconcile", f"positions not checked: {type(e).__name__}: {e}")
+                    return
+                # a check that cannot read Zerodha just now must not stop the strategy (its exits) this moment
+                if _time.time() - self._stops_checked >= self.STOPS_EVERY:
                     self._stops_checked = _time.time()
-                    self.broker.check_protective_stops(now)
+                    try:
+                        self.broker.check_protective_stops(now)
+                        if getattr(self.broker, "stop_reads_failed", 0):
+                            self._zerodha_failing("stops", f"{self.broker.stop_reads_failed} protective stop(s) not read")
+                        else:
+                            self._zerodha_ok("stops")
+                    except Halt:
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        self._zerodha_failing("stops", f"protective stops not checked: {type(e).__name__}: {e}")
                 else:   # between checks: any stop fill already pushed on the price stream
-                    self.broker.check_protective_stops(now, from_stream=True)
+                    try:
+                        self.broker.check_protective_stops(now, from_stream=True)
+                    except Halt:
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        self.broker._not_read(f"Stop updates not read: {type(e).__name__}: {e}", "stream")
                 if _time.time() - self._positions_checked >= self.broker.POSITIONS_EVERY:
                     self._positions_checked = _time.time()
-                    self.broker.check_positions(now)
+                    try:
+                        self.broker.check_positions(now)
+                        self._zerodha_ok("positions")
+                    except Halt:
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        self._zerodha_failing("positions", f"positions not checked: {type(e).__name__}: {e}")
             self.stepper.step(now)
             if self.live is not None and self.live.daily_loss_limit > 0 and self.feed.bar_closed:
                 eq = self.stepper.ctx.equity
@@ -346,6 +375,27 @@ class Session:
             self.halt(str(e), square_off=False, now=now)
         except Halt as e:
             self.halt(str(e), square_off=True, now=now)
+
+    FAILING_ALERT_AFTER = 120       # seconds of Zerodha checks failing in a row before an alert
+    STOPS_EVERY = 30                # seconds between full reads of the protective stops at Zerodha
+
+    def _zerodha_ok(self, kind: str) -> None:
+        self._failing.pop(kind, None)
+
+    def _zerodha_failing(self, kind: str, msg: str) -> None:
+        """A check of one kind (reconcile, stops, positions) failed: logged (once a minute for each kind); failing for
+        FAILING_ALERT_AFTER s with no success of that kind in between sends one alert, so a session that cannot see
+        Zerodha is never silent."""
+        self.broker._not_read(f"Zerodha: {msg}", "fail " + kind)
+        since, told = self._failing.get(kind, (None, False))
+        if since is None:
+            self._failing[kind] = (_time.time(), False)
+        elif not told and _time.time() - since >= self.FAILING_ALERT_AFTER:
+            self._failing[kind] = (since, True)
+            self.notify(f"Algo Lab cannot check Zerodha: {self.slot.id}",
+                        f"For {int(_time.time() - since)} s: {msg}. "
+                        + ("Orders and exits wait until it works again; " if kind == "reconcile" else "")
+                        + "protective stops already at Zerodha still work. Check Kite.")
 
     def kill_between_updates(self, now) -> None:
         """A Stop from the dashboard while no update is coming (market closed, before the open, between updates).

@@ -3,6 +3,37 @@
 Update this in every pull request that changes what is live, data coverage or work in progress.
 Newest information first within each section.
 
+## Legs held overnight close the next day (17 Nov 2026, pull request "live-next-day-stops", needs 134)
+
+- Why: protective stops are DAY orders. The morning after a short leg was held overnight (premium_strangle,
+  put_credit_spread, iron_fly, double_calendar...), Zerodha no longer knows the old stop's order id ("Couldn't find
+  that order_id"). Every buy-back of that leg first read the stop, failed on that error and gave up: every second, no
+  square-off, no alert. The stop check every 30 s failed the same way. The session also lived across days without
+  restarting (the feed adopts the morning login), so the start-of-session check never ran again.
+- Now: each new day the start-of-day check runs again before any order (positions against Zerodha; stops not in
+  today's order book are placed again, at the old trigger or 1.2x the price). An order Zerodha cannot find and that is
+  not in today's order book counts as gone. Before a leg whose stop is gone is bought back, Zerodha must still hold
+  exactly that leg (the stop may have filled): otherwise nothing is sent and the session stops for a check in Kite.
+- A stop or position check that cannot read Zerodha at that moment is logged (once a minute) and no longer stops the
+  strategy, and so its exits, from running.
+- Orders in the restart journal from an earlier day no longer block the morning check (alert when one is dropped).
+- A stop counts as gone only if Kite says it cannot find it, it was placed on an earlier day, and today's order book
+  does not list it: a timeout or a lagging order book never leads to a second stop. A gone stop stays tracked until a
+  new one is placed (tried at every 30 s check, one alert if it cannot be placed). A filled stop still stops the session
+  first. A two-leg exit checks every gone stop before taking any stop off. Zerodha's positions are read twice before
+  a difference blocks. A mismatch in the morning still renews the stops of the legs that match and names the legs
+  left without one. Legs past their expiry are left to the settlement (no false mismatch the morning after expiry).
+- Zerodha that cannot be read for 2 minutes in a row sends one alert ("Algo Lab cannot check Zerodha").
+- Also fixed (found by the review): selling more of a short leg used to leave its first stop at Zerodha untracked next
+  to a new one (two could fill); now the stop is replaced by one for the whole leg. A stop that filled in part and was
+  cancelled at the close is booked.
+- Each protective stop now has its own tag: if Zerodha's answer to a placement is lost, the stop is found and adopted,
+  never placed a second time; while that cannot be told, no other stop is placed for the leg. A stop is placed again
+  only on a leg Zerodha still holds. A "cannot check Zerodha" alert counts each kind of check on its own.
+- Order-safety review (independent agent, 17 Nov, six rounds): PASS WITH FIXES (4 High, 4 Medium) → fixes → PASS WITH
+  FIXES (1 Critical, 2 High, 1 Medium, in the new stop retry) → fixes → PASS WITH FIXES (1 High: a stop whose answer was
+  lost) → fixes → PASS WITH FIXES (1 High) → fixes → PASS WITH FIXES (1 Medium) → fixes → PASS (3 Low, also fixed).
+
 ## Live closes never give up (10 Nov 2026, pull request "close-never-gives-up")
 
 - Why: 9 Nov (expiry day) intraday_strangle-7's exit BUY 65 NIFTY 24900 CE did not fill in the 30 s chase (capped at
