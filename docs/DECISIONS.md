@@ -102,3 +102,4 @@ Dated, newest first. One line each; link the pull request when there is one.
 - 2026-10-29 — Compare with paper (Hamid): only trades opened inside the period are compared; earlier ones are listed apart as information.
 - 2026-10-30 — Live entry legs are placed together (Hamid: fix the 5 s second-leg delay). Order-execution code: no automated reviewer exists in the repo; Hamid to review the PR.
 - 2026-11-02 — Stop on a flat session stops it at once, also outside market hours (Hamid). Multi-live next (Hamid): same contract may be held by several live sessions, per-session daily loss limits only, max live sessions a setting (default 3); multi-live before the 24 Oct live-safety fixes.
+- 2026-11-17 — Gmail and Telegram alerts for live trading (Hamid): set from Profile, not by editing the server.
