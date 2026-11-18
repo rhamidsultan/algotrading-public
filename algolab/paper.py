@@ -21,7 +21,7 @@ import json
 import shutil
 import threading
 import time as _time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from .config import RUNTIME, ist_now
@@ -255,6 +255,7 @@ class Session:
             self.broker = LiveBroker(cfg["account"]["capital"], CostModel(**cfg["costs"]), cfg["execution"]["slippage_pct"],
                                      cfg["market"]["tick_size"], cfg.get("cost_history"), settings=self.live,
                                      notify=self.notify, log=self._log)
+            self.broker.journal = self.slot.dir / "working.json"     # orders in flight, written the moment they change
         else:
             self.live = None
             self.broker = make_broker(cfg)
@@ -279,6 +280,14 @@ class Session:
         self.bars = 0
         self.stepper = None
         self.halted = ""
+        self.closing_only = False        # live: stopped, but a leg it could not close is still retried (CLOSE_RETRY_EVERY)
+        self._close_tried = 0.0
+        self.close_tries = 0
+        if (self.saved and self.saved.get("closing_only") and self.mode == "live" and self.broker.positions
+                and str(self.saved.get("time", ""))[:10] == ist_now().date().isoformat()):   # not on a later day
+            self.halted = self.saved.get("halted") or "Stopped"
+            self.closing_only = True
+            self.close_tries = int(self.saved.get("close_tries") or 0)
         self._kill_noted = False
         self._stops_checked = 0.0
         self._positions_checked = _time.time()   # the start-of-session reconcile covers the first minute
@@ -300,7 +309,13 @@ class Session:
     def beat(self) -> None:
         self.slot.heartbeat.write_text(str(_time.time()))
 
+    CLOSE_RETRY_EVERY = 30          # seconds between tries to close what a live square-off could not
+    CLOSE_RETRY_UNTIL = time(15, 25)  # IST: after this the retries stop and a person is asked (the market closes)
+
     def step(self, now) -> None:
+        if self.closing_only:
+            self._retry_close(now)
+            return
         if self.halted:
             return
         from .live import Blocked, Halt
@@ -354,19 +369,119 @@ class Session:
     def halt(self, reason: str, square_off: bool, now) -> None:
         """Square off (if asked and possible), stop for good and tell the user."""
         problems = []
+        self.halted = reason                                 # first: whatever fails below, it trades no more
+        live = self.mode == "live" and hasattr(self.broker, "settle_working")
+
+        def settle():
+            try:
+                return self.broker.settle_working(now)
+            except Exception as e:  # noqa: BLE001
+                return [f"orders not read: {e}"]
+        if live and square_off:
+            problems += settle()                             # first: a late opening fill is a leg to close too
         if square_off and self.broker.positions:
+            retry = getattr(self.broker, "retry_close", None) if self.mode == "live" else None
             for c, pos in sorted(list(self.broker.positions.items()), key=lambda kv: kv[1].qty > 0):
                 try:
-                    f = self.broker.execute(now, c, "BUY" if pos.qty < 0 else "SELL", abs(pos.qty), self.feed.quote(c),
-                                            "Square-off", pos.group)
+                    if retry is not None:   # live: only what Zerodha still holds, never over an order that may fill
+                        f = retry(now, c, self.feed.quote(c), "Square-off")
+                    else:
+                        f = self.broker.execute(now, c, "BUY" if pos.qty < 0 else "SELL", abs(pos.qty),
+                                                self.feed.quote(c), "Square-off", pos.group)
                     if f is not None and not f.note:
                         f.note = reason
                 except Exception as e:  # noqa: BLE001
                     problems.append(f"{c.label}: {e}")
-        self.halted = reason
+        if live and square_off and self.broker.working:
+            problems += settle()                             # e.g. an opening order whose cancel was not confirmed
+        if live and square_off and not problems and self.broker.positions:
+            problems.append("a leg filled late: " + ", ".join(c.label for c in self.broker.positions))
         msg = reason + (" Positions were squared off." if square_off and not problems else "")
+        if (live and square_off and problems and (self.broker.positions or self.broker.working)
+                and self._may_retry(now)):
+            # keep the session (closing only): it retries every CLOSE_RETRY_EVERY s, also after a restart
+            self.closing_only = True
+            self._close_tried = _time.time()
+            msg += (" NOT CLOSED YET: " + "; ".join(problems) + f". Algo Lab keeps trying every {self.CLOSE_RETRY_EVERY} s"
+                    f" until {self.CLOSE_RETRY_UNTIL:%H:%M} IST, with its protective stop back at Zerodha (unless an order "
+                    "may still fill); you will get an alert when it is closed.")
+            self._log(f"Session stopped, closing: {msg}")
+            self.slot.status.write_text(f"Stopped, closing: {msg}", encoding="utf-8")
+            self.notify(f"Algo Lab live session stopped, still closing: {self.slot.id}", msg)
+            self._save_now(now)
+            return
         if problems:
             msg += " COULD NOT CLOSE: " + "; ".join(problems) + " - close these in Kite now."
+        self._finish(msg, now)
+
+    def _retry_close(self, now) -> None:
+        """Closing only: try again to close what the square-off could not. Each try sends only what Zerodha still holds
+        for this session (LiveBroker.retry_close), so a leg closed in Kite meanwhile is not bought again. Each try is
+        short (one round at the furthest step), so the other sessions are not held up for long."""
+        from .live import Blocked
+        kill = self.slot.dir / "KILL"
+        late = not self._may_retry(now)   # checked before anything is sent
+        if kill.exists() or late:          # Stop while closing, or the close: a person takes over in Kite
+            kill.unlink(missing_ok=True)
+            try:
+                left = self.broker.settle_working(now)       # books fills; sends nothing
+            except Exception as e:  # noqa: BLE001
+                left = [f"orders not read: {e}"]
+            self.closing_only = False
+            why = (f"Retries stopped at {self.CLOSE_RETRY_UNTIL:%H:%M} IST." if late
+                   else "Retries stopped from the dashboard.")
+            legs = [f"{c.label} ({pos.qty:+d}, " + ("protective stop at Zerodha" if c.label in self.broker.protect
+                                                    else "NO stop at Zerodha") + ")"
+                    for c, pos in self.broker.positions.items()]
+            if not legs and not left:
+                self._finish(self.halted + f" {why} Positions were squared off.", now)
+                return
+            self._finish(self.halted + f" {why} NOT CLOSED: " + "; ".join(legs + left) + " - close these in Kite now.",
+                         now)
+            return
+        if _time.time() - self._close_tried < self.CLOSE_RETRY_EVERY:
+            return
+        self.close_tries += 1
+        problems, blocked = [], False
+        try:
+            problems += self.broker.settle_working(now)     # every order that may still fill, opening ones too
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"orders not read: {e}")
+        for c, pos in sorted(list(self.broker.positions.items()), key=lambda kv: kv[1].qty > 0):
+            try:
+                self.broker.retry_close(now, c, self.feed.quote(c), "Square-off (retry)", quick=True)
+            except Blocked as e:
+                blocked = True
+                problems.append(f"{c.label}: {e}")
+            except Exception as e:  # noqa: BLE001
+                problems.append(f"{c.label}: {e}")
+        self._close_tried = _time.time()            # counted from the end of the try
+        if not self.broker.positions and not getattr(self.broker, "working", None):
+            cancel = getattr(self.broker, "cancel_all_protective", None)
+            left = cancel(now) if cancel is not None else []
+            self.closing_only = False
+            self._finish(self.halted + f" Positions were squared off (on try {self.close_tries + 1})."
+                         + (" CHECK KITE NOW: " + "; ".join(left) + "." if left else ""), now)
+            return
+        if blocked:
+            self.closing_only = False
+            self._finish(self.halted + " COULD NOT CLOSE: " + "; ".join(problems) + " - close these in Kite now.", now)
+            return
+        self._log(f"Still closing (try {self.close_tries + 1}): " + "; ".join(problems))
+        if self.close_tries % 10 == 0:
+            self.notify(f"Algo Lab still closing: {self.slot.id}", f"Try {self.close_tries + 1}: " + "; ".join(problems))
+        self._save_now(now)
+
+    def _may_retry(self, now) -> bool:
+        t = now.time() if hasattr(now, "time") else None
+        day = getattr(self, "_closing_day", None)
+        if day is None:
+            self._closing_day = day = now.date() if hasattr(now, "date") else None
+        same_day = day is None or not hasattr(now, "date") or now.date() == day
+        return same_day and (t is None or t < self.CLOSE_RETRY_UNTIL)
+
+    def _finish(self, msg: str, now) -> None:
+        """Stop for good and tell the user."""
         self._log(f"Session stopped: {msg}")
         self.slot.desired.unlink(missing_ok=True)
         self.slot.status.write_text(f"Stopped: {msg}", encoding="utf-8")
@@ -375,12 +490,16 @@ class Session:
         else:
             from .pushbox import push
             push(f"Paper session stopped: {self.want.get('label') or self.slot.id}", msg, "/paper", "trading")
-        try:   # record the final state (also when no bar closes again)
+        self._save_now(now)
+
+    def _save_now(self, now) -> None:
+        try:   # record the state now (also when no bar closes again)
             self._after_bar(self.stepper.ctx, (now, self.stepper.ctx.equity, self.feed.spot))
         except Exception:  # noqa: BLE001 - e.g. before the open: no prices yet. Still save the account as it is now
             try:
                 state = _read_json(self.slot.state) or {}
-                state.update(status="stopped", halted=self.halted, broker=self.broker.to_dict(), logs=self.logs[-300:])
+                state.update(status="stopped", halted=self.halted, closing_only=self.closing_only,
+                             close_tries=self.close_tries, broker=self.broker.to_dict(), logs=self.logs[-300:])
                 _write_json(self.slot.state, state)
             except Exception:  # noqa: BLE001
                 pass
@@ -400,6 +519,7 @@ class Session:
                                      "entry_charges": sum(p.entry_costs for p in b.positions.values())})
         _write_json(self.slot.state, {
             "status": "stopped" if self.halted else "running", "halted": self.halted,
+            "closing_only": self.closing_only, "close_tries": self.close_tries,
             "id": self.slot.id, "label": self.want.get("label", ""),
             "strategy": self.name, "params": self.strategy.params, "feed": self.feed_kind, "mode": self.mode,
             "live": None if self.live is None else {k: getattr(self.live, k) for k in self.live.__dataclass_fields__},
