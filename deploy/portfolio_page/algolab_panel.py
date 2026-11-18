@@ -2898,6 +2898,125 @@ def api_profile():
                    start_pages={k: v for k, v in START_PAGES.items() if path_allowed(k)})
 
 
+# ---- email (Gmail) and Telegram alerts (owner only) ----------------------------------------------------------------
+# The dashboard's config.json holds them ("email", "telegram"). The dashboard's own alerts and the Algo Lab engine
+# (live / shadow sessions: fills, stops, square-offs, closes that fail) read them from there for every alert, so a
+# change works at once. Passwords and tokens are never sent back to the page.
+def _trader_cfg_path():
+    main = sys.modules.get("__main__")
+    return Path(getattr(main, "CONFIG_PATH", None) or Path(__file__).resolve().parent / "config.json")
+
+
+def _alert_view(cfg):
+    e, t = cfg.get("email") or {}, cfg.get("telegram") or {}
+    return {"email": {"enabled": bool(e.get("enabled")), "from": e.get("from") or "", "to": e.get("to") or "",
+                      "has_password": bool(e.get("app_password")) and "PASTE" not in str(e.get("app_password"))},
+            "telegram": {"enabled": bool(t.get("enabled")), "chat_id": str(t.get("chat_id") or ""),
+                         "has_token": bool(t.get("bot_token"))}}
+
+
+def _telegram(token, method, data=None, timeout=15):
+    import urllib.parse
+    import urllib.request
+    body = urllib.parse.urlencode(data).encode() if data else None
+    with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/{method}", body, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+@panel.route("/api/alert-channels", methods=["GET", "POST"])
+def api_alert_channels():
+    """GET: what is set (no password or token). POST {email: {enabled, from, to, app_password}, telegram: {enabled,
+    bot_token, chat_id}}: save. An empty password or token keeps the saved one."""
+    path = _trader_cfg_path()
+    cfg = _json(path, None)
+    if not isinstance(cfg, dict):
+        return jsonify(error=f"The dashboard settings ({path.name}) could not be read."), 500
+    if request.method == "GET":
+        return jsonify(_alert_view(cfg))
+    body = request.get_json(silent=True) or {}
+    e_in, t_in = body.get("email") or {}, body.get("telegram") or {}
+    e, t = dict(cfg.get("email") or {}), dict(cfg.get("telegram") or {})
+    e["enabled"] = bool(e_in.get("enabled"))
+    for k in ("from", "to"):
+        e[k] = str(e_in.get(k) or "").strip()
+    pw = "".join(str(e_in.get("app_password") or "").split())     # Google shows it in groups of four
+    if pw:
+        e["app_password"] = pw
+    if "PASTE" in str(e.get("app_password", "")):
+        e["app_password"] = ""
+    e.setdefault("smtp_host", "smtp.gmail.com")
+    e.setdefault("smtp_port", 465)
+    t["enabled"] = bool(t_in.get("enabled"))
+    t["chat_id"] = str(t_in.get("chat_id") or "").strip()
+    tok = str(t_in.get("bot_token") or "").strip()
+    if tok:
+        t["bot_token"] = tok
+    if e["enabled"]:
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e["from"]):
+            return jsonify(error="Gmail: enter the Gmail address that sends the alerts."), 400
+        if not e["to"]:
+            e["to"] = e["from"]
+        if not e.get("app_password"):
+            return jsonify(error="Gmail: paste the 16-letter app password (not your Gmail password)."), 400
+    if t["enabled"]:
+        if not re.fullmatch(r"\d+:[\w-]{20,}", t.get("bot_token") or ""):
+            return jsonify(error="Telegram: paste the bot token BotFather gave you (it looks like 123456:ABC...)."), 400
+        if not re.fullmatch(r"-?\d+", t["chat_id"]):
+            return jsonify(error="Telegram: tap Find my chat id after sending your bot a message."), 400
+    cfg["email"], cfg["telegram"] = e, t
+    try:
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
+    except OSError as ex:
+        return jsonify(error=f"Could not save the settings: {ex}"), 500
+    main = sys.modules.get("__main__")
+    live = getattr(main, "CFG", None)
+    if isinstance(live, dict):                     # the dashboard's own alerts use the new settings at once
+        live["email"], live["telegram"] = e, t
+    return jsonify(_alert_view(cfg))
+
+
+@panel.route("/api/alert-channels/test", methods=["POST"])
+def api_alert_channels_test():
+    """Send a test through every channel that is on; one line per channel."""
+    main = sys.modules.get("__main__")
+    send = getattr(main, "notify", None)
+    if send is None:
+        return jsonify(error="The dashboard's alert sender is not available."), 500
+    out = send("Algo Lab test alert", "Alerts from the dashboard and from live trading will arrive here.")
+    return jsonify(result=out)
+
+
+@panel.route("/api/alert-channels/telegram-chat", methods=["POST"])
+def api_alert_channels_chat():
+    """Find the chat id: the newest chat that sent the bot a message (send the bot any message first)."""
+    body = request.get_json(silent=True) or {}
+    tok = str(body.get("bot_token") or "").strip() or str((_json(_trader_cfg_path(), {}) or {}).get("telegram", {}).get("bot_token") or "")
+    if not tok:
+        return jsonify(error="Paste the bot token first."), 400
+    try:
+        me = _telegram(tok, "getMe")
+        upd = _telegram(tok, "getUpdates", {"limit": 20, "timeout": 0})
+    except Exception as ex:  # noqa: BLE001
+        msg = str(ex)
+        if "401" in msg or "404" in msg:
+            msg = "Telegram did not accept this bot token. Copy it again from BotFather."
+        return jsonify(error=msg.replace(tok, "…")), 400
+    chats = []
+    for u in reversed(upd.get("result") or []):
+        m = u.get("message") or u.get("edited_message") or u.get("channel_post") or {}
+        ch = m.get("chat") or {}
+        if ch.get("id") is not None and all(c["id"] != ch["id"] for c in chats):
+            name = ch.get("title") or " ".join(x for x in (ch.get("first_name"), ch.get("last_name")) if x) or ch.get("username") or ""
+            chats.append({"id": str(ch["id"]), "name": name})
+    bot = (me.get("result") or {}).get("username") or ""
+    if not chats:
+        return jsonify(error=f"No message found. Open Telegram, send any message to @{bot}, then tap again.", bot=bot), 404
+    return jsonify(chat_id=chats[0]["id"], name=chats[0]["name"], bot=bot, chats=chats)
+
+
 # ---- update the server from GitHub (owner only; see deploy/self_update.sh) ----------------------------------
 @panel.route("/api/server-update", methods=["GET", "POST"])
 def api_server_update():
@@ -3097,6 +3216,14 @@ textarea{resize:vertical;min-height:60px}
 .chk{display:flex;gap:10px;align-items:flex-start;padding:7px 0;font-size:14px;cursor:pointer}
 .chk input{margin-top:3px}
 .link{background:none;border:0;color:var(--down);cursor:pointer;font:inherit;font-size:13px;padding:0}
+input[type=password]{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font:inherit}
+.ach{border-top:1px solid var(--line);margin-top:12px;padding-top:4px}
+.ach:first-of-type{border-top:0;margin-top:0;padding-top:0}
+.ach .chk{font-weight:600}
+.ach ol{padding-left:18px;margin:4px 0 0}
+.ach ol li{margin:2px 0}
+.alst{font-size:13px;margin-left:auto;color:var(--muted)}.alst.on{color:var(--up)}
+#alCard a{color:var(--accent)}
 @media (max-width:520px){.themes{grid-template-columns:repeat(3,1fr)}.photo{width:80px;height:80px;font-size:28px}}
 </style>
 </head>
@@ -3124,6 +3251,50 @@ textarea{resize:vertical;min-height:60px}
       <span class="msg" id="srvMsg"></span>
     </div>
     <details style="margin-top:8px"><summary class="sub">Version and last update log</summary><pre class="srvpre" id="srvLog"></pre></details>
+  </div>
+
+  <div class="card hide" id="alCard">
+    <h2>Email and Telegram alerts</h2>
+    <div class="sub">Live and shadow sessions send an alert for every order, protective stop, square-off and close that
+      fails; the dashboard sends its price alerts. They go to your phone's notifications already; switch on Gmail and
+      Telegram to get them there too.</div>
+    <div class="ach">
+      <label class="chk"><input type="checkbox" id="alEmailOn"> Gmail <span class="alst" id="alEmailSt"></span></label>
+      <div id="alEmailBox">
+        <label for="alFrom">Gmail address that sends the alerts</label>
+        <input id="alFrom" type="email" maxlength="120" autocomplete="off" placeholder="you@gmail.com">
+        <label for="alPw">App password</label>
+        <input id="alPw" type="password" maxlength="40" autocomplete="new-password" placeholder="16 letters">
+        <div class="sub" style="margin-top:4px">Not your Gmail password: make one at
+          <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">Google › App passwords</a>
+          (needs 2-Step Verification), name it "Algo Lab", copy the 16 letters here.</div>
+        <label for="alTo">Send to (empty = the same address)</label>
+        <input id="alTo" type="email" maxlength="120" autocomplete="off">
+      </div>
+    </div>
+    <div class="ach">
+      <label class="chk"><input type="checkbox" id="alTgOn"> Telegram <span class="alst" id="alTgSt"></span></label>
+      <div id="alTgBox">
+        <ol class="sub">
+          <li>In Telegram, open <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>, send
+            <b>/newbot</b>, choose a name, and copy the token it gives you.</li>
+          <li>Open your new bot and send it any message (e.g. "hi").</li>
+          <li>Paste the token below and tap <b>Find my chat id</b>.</li>
+        </ol>
+        <label for="alTok">Bot token</label>
+        <input id="alTok" type="password" maxlength="80" autocomplete="off" placeholder="123456789:AA...">
+        <label for="alChat">Chat id</label>
+        <div class="row" style="margin-top:0">
+          <input id="alChat" type="text" maxlength="20" autocomplete="off" style="flex:1;min-width:140px">
+          <button class="btn ghost" id="alFind" type="button">Find my chat id</button>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <button class="btn" id="alSave" type="button">Save</button>
+      <button class="btn ghost" id="alTest" type="button">Send a test</button>
+      <span class="msg" id="alMsg"></span>
+    </div>
   </div>
 
   <div class="card">
@@ -3397,6 +3568,56 @@ $("nTest").onclick = async () => {
   catch (e) { $("nMsg").className = "msg err"; $("nMsg").textContent = e.message; }
 };
 pkLoad().catch(() => {}); nLoad().catch(e => { $("nText").textContent = e.message; });
+
+// ---- Gmail / Telegram alerts (owner only) ----
+let AL = null;
+function alDraw() {
+  const e = AL.email, t = AL.telegram;
+  $("alEmailOn").checked = e.enabled; $("alFrom").value = e.from; $("alTo").value = e.to === e.from ? "" : e.to;
+  $("alPw").value = ""; $("alPw").placeholder = e.has_password ? "Saved (leave empty to keep it)" : "16 letters";
+  $("alTgOn").checked = t.enabled; $("alChat").value = t.chat_id;
+  $("alTok").value = ""; $("alTok").placeholder = t.has_token ? "Saved (leave empty to keep it)" : "123456789:AA...";
+  const st = (id, on) => { $(id).textContent = on ? "On" : "Off"; $(id).className = "alst" + (on ? " on" : ""); };
+  st("alEmailSt", e.enabled); st("alTgSt", t.enabled);
+  alBoxes();
+}
+function alBoxes() {
+  $("alEmailBox").classList.toggle("hide", !$("alEmailOn").checked);
+  $("alTgBox").classList.toggle("hide", !$("alTgOn").checked);
+}
+function alSay(text, ok) { $("alMsg").className = "msg " + (ok ? "ok" : "err"); $("alMsg").textContent = text; }
+$("alEmailOn").onchange = alBoxes; $("alTgOn").onchange = alBoxes;
+async function alSave() {
+  AL = await api("/api/alert-channels", {method: "POST", body: JSON.stringify({
+    email: {enabled: $("alEmailOn").checked, from: $("alFrom").value.trim(), to: $("alTo").value.trim(), app_password: $("alPw").value},
+    telegram: {enabled: $("alTgOn").checked, bot_token: $("alTok").value.trim(), chat_id: $("alChat").value.trim()}})});
+  alDraw();
+}
+$("alSave").onclick = async () => {
+  $("alSave").disabled = true;
+  try { await alSave(); alSay("Saved. Tap Send a test to check.", true); } catch (e) { alSay(e.message, false); }
+  $("alSave").disabled = false;
+};
+$("alTest").onclick = async () => {
+  $("alTest").disabled = true; alSay("Sending…", true);
+  try {
+    if ($("alPw").value || $("alTok").value) await alSave();          // typed but not saved yet
+    const r = await api("/api/alert-channels/test", {method: "POST"});
+    const lines = r.result || [], bad = lines.some(l => /failed|no channel/i.test(l));
+    alSay(lines.join(" · ").replace(/^no channel enabled.*$/, "Gmail and Telegram are both off."), !bad);
+  } catch (e) { alSay(e.message, false); }
+  $("alTest").disabled = false;
+};
+$("alFind").onclick = async () => {
+  $("alFind").disabled = true; alSay("Asking Telegram…", true);
+  try {
+    const r = await api("/api/alert-channels/telegram-chat", {method: "POST", body: JSON.stringify({bot_token: $("alTok").value.trim()})});
+    $("alChat").value = r.chat_id;
+    alSay(`Found: ${r.name || "your chat"} with @${r.bot}. Tap Save.`, true);
+  } catch (e) { alSay(e.message, false); }
+  $("alFind").disabled = false;
+};
+api("/api/alert-channels").then(a => { AL = a; $("alCard").classList.remove("hide"); alDraw(); }).catch(() => {});   // owner only
 fetch("/api/account", {cache: "no-store"}).then(r => r.ok ? r.json() : null).then(a => {
   if (!a || !a.user) return;
   $("acctText").textContent = "Signed in as " + a.user + (a.owner ? " (owner: full access)" : "") +

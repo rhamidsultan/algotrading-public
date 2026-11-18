@@ -71,7 +71,9 @@ OWNER_EXACT = {"/login", "/callback", "/login/paste", "/api/test-alert", "/api/s
                "/api/server-update",                                             # update the server from GitHub
                "/api/compare-period/keep",                                       # days of 1-second bars kept
                "/api/ibkr-control", "/api/risk-defaults",                        # start / stop IBKR
-               "/api/live/stop-all"}                                             # square off every LIVE session
+               "/api/live/stop-all",                                             # square off every LIVE session
+               "/api/alert-channels", "/api/alert-channels/test",                # Gmail / Telegram alert settings
+               "/api/alert-channels/telegram-chat"}
 OWNER_PREFIX = ("/api/users/", "/order-test", "/api/order-test", "/positions", "/api/positions")   # positions: real orders
 VIEW = {   # GET addresses: exact paths, path prefixes
     "portfolio": ({"/", "/stock", "/gold", "/export.csv", "/api/data", "/api/live", "/api/history", "/api/stock",

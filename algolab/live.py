@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import math
 import smtplib
+import threading
 import time as _time
 import urllib.parse
 import urllib.request
@@ -79,10 +80,40 @@ class LiveSettings:
 
 
 # ---- alerts --------------------------------------------------------------------------------
-def make_notifier(trader_config: str | None, log=print):
-    """Email / Telegram through the portfolio dashboard's alert settings (config.json), if any."""
-    def notify(subject: str, body: str) -> None:
-        log(f"ALERT: {subject} - {body}")
+_outbox: "queue.Queue | None" = None
+_sender: threading.Thread | None = None
+
+
+def _send_later(job) -> None:
+    """Email and Telegram go out from one background thread: an alert never holds up an order (a Gmail login takes
+    1-3 s, up to 20 s when slow). At most 200 wait; beyond that the oldest are kept and new ones dropped (the session
+    log and the phone notification still have them)."""
+    global _outbox, _sender
+    import queue
+    if _outbox is None:
+        _outbox = queue.Queue(maxsize=200)
+    try:
+        _outbox.put_nowait(job)
+    except queue.Full:
+        return
+    if _sender is None or not _sender.is_alive():
+        def drain():
+            while True:
+                fn = _outbox.get()
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001 - one failed alert must not stop the others
+                    pass
+                finally:
+                    _outbox.task_done()
+        _sender = threading.Thread(target=drain, name="algolab-alerts", daemon=True)
+        _sender.start()
+
+
+def make_notifier(trader_config: str | None, log=print, background: bool = True):
+    """Email (Gmail) / Telegram through the portfolio dashboard's alert settings (config.json: set on Profile ›
+    Email and Telegram alerts), read again for every alert so a change works at once. Sent in the background."""
+    def send(subject: str, body: str) -> None:
         try:
             cfg = json.loads(Path(trader_config).read_text()) if trader_config else {}
         except (OSError, ValueError):
@@ -91,7 +122,7 @@ def make_notifier(trader_config: str | None, log=print):
         if e.get("enabled"):
             try:
                 msg = EmailMessage()
-                msg["Subject"], msg["From"], msg["To"] = subject, e["from"], e["to"]
+                msg["Subject"], msg["From"], msg["To"] = subject, e["from"], e.get("to") or e["from"]
                 msg.set_content(body)
                 with smtplib.SMTP_SSL(e.get("smtp_host", "smtp.gmail.com"), e.get("smtp_port", 465), timeout=20) as s:
                     s.login(e["from"], e["app_password"])
@@ -101,10 +132,17 @@ def make_notifier(trader_config: str | None, log=print):
         t = cfg.get("telegram", {})
         if t.get("enabled"):
             try:
-                data = urllib.parse.urlencode({"chat_id": t["chat_id"], "text": f"{subject}\n{body}"}).encode()
+                data = urllib.parse.urlencode({"chat_id": t["chat_id"], "text": f"{subject}\n{body}"[:4000]}).encode()
                 urllib.request.urlopen(f"https://api.telegram.org/bot{t['bot_token']}/sendMessage", data, timeout=20)
             except Exception as ex:  # noqa: BLE001
-                log(f"telegram alert failed: {ex}")
+                log(f"telegram alert failed: {str(ex).replace(str(t.get('bot_token') or '?'), '…')}")
+
+    def notify(subject: str, body: str) -> None:
+        log(f"ALERT: {subject} - {body}")
+        if background:
+            _send_later(lambda: send(subject, body))
+        else:
+            send(subject, body)
     return notify
 
 
