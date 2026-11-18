@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>US stocks</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#646b78;--line:#e5e7eb;--up:#087a4c;--down:#c8323a;--accent:#2f6fed;--warn:#a06a1a}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#e8eaee;--muted:#8b93a1;--line:#272b35;--up:#34c98a;--down:#f0626a;--accent:#6c9bff;--warn:#e0a84a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+h2{font-size:13px;margin:0;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:6px}
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;min-width:0}
+.status b{color:var(--text);font-weight:600}
+.ic{width:15px;height:15px;display:inline-block;vertical-align:-3px;flex:none}
+.ic.live{color:var(--up)}.ic.closed{color:var(--muted)}.ic.stale,.ic.key{color:var(--warn)}.ic.err{color:var(--down)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px}
+.up{color:var(--up)}.down{color:var(--down)}
+.hide{display:none!important}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;gap:2px;background:var(--card)}
+.seg button{min-width:34px}
+.seg button{border:0;background:transparent;color:var(--muted);border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+.nums{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:10px;font-variant-numeric:tabular-nums}
+.nums .lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.nums .nv{font-size:20px;font-weight:700;line-height:1.25;white-space:nowrap}
+.nums>div:first-child .nv{font-size:23px}
+.nums .ns{font-size:12px;color:var(--muted)}
+.vbar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--line);margin-top:12px}
+.vbar i{height:100%;transition:width .4s}
+#invBar{background:var(--accent)}#pnlBar.up{background:var(--up)}
+#pnlBar.down{background:repeating-linear-gradient(45deg,var(--down) 0 4px,color-mix(in srgb,var(--down) 45%,transparent) 4px 8px)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip b{color:var(--text);font-weight:600}.chip .ic{width:13px;height:13px;vertical-align:-2px}
+.chartbox{height:230px;position:relative;margin-top:8px}
+.hhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.hhead .seg{margin-left:auto}
+.cnt{font-size:12px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0}
+.hl{font-variant-numeric:tabular-nums}
+.hr{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,auto) minmax(104px,auto) minmax(84px,auto) 110px;gap:0 12px;align-items:center;padding:8px 2px;border-top:1px solid var(--line)}
+.hr.hd{border-top:0;padding:0 2px 4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.hr.hd span{cursor:pointer;user-select:none;padding:4px 0}.hr.hd span.on{color:var(--accent)}
+.hr>span{text-align:right;white-space:nowrap}.hr>span:first-child{text-align:left;min-width:0}
+.hr .nm{font-weight:600;font-size:14px}
+.hr small{display:block;font-size:12px;color:var(--muted)}.hr small.up{color:var(--up)}.hr small.down{color:var(--down)}
+.hr .pv{font-weight:650}.hr .vs{display:none}
+.wbar{display:block;height:3px;border-radius:2px;background:var(--line);margin:4px 0 0 auto;max-width:90px}
+.wbar i{display:block;height:100%;border-radius:2px;background:var(--accent);opacity:.7}
+.banner{background:var(--card);border:1px solid var(--down);border-radius:12px;padding:12px 14px;margin-bottom:10px;font-size:14px}
+.banner .ic{width:16px;height:16px;margin-right:4px}
+.banner code{font-size:13px}
+.empty{color:var(--muted);font-size:14px;padding:8px 0}
+@media (max-width:760px){
+  .hr{grid-template-columns:minmax(0,1fr) minmax(72px,auto) minmax(84px,auto);gap:0 10px}
+  .hr .w{display:none}.hr .vs{display:block}
+  .nums .nv{font-size:17px}.nums>div:first-child .nv{font-size:19px}
+  .chartbox{height:200px}
+}
+@media (max-width:380px){.seg button{padding:6px 9px}.nums{gap:6px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="status"><span id="stIc"></span><span id="status">Loading…</span></div>
+    <div class="seg" title="Show amounts in"><button id="cUSD" type="button">$</button><button id="cINR" type="button">₹</button></div>
+  </header>
+
+  <div class="banner hide" id="errBox"></div>
+
+  <div class="card" style="margin-top:0">
+    <div class="nums">
+      <div><div class="lbl">Value</div><div class="nv" id="value">–</div><div class="ns" id="invested"></div></div>
+      <div><div class="lbl">Today</div><div class="nv" id="day">–</div><div class="ns" id="dayPct"></div></div>
+      <div><div class="lbl">P&amp;L</div><div class="nv" id="pnl">–</div><div class="ns" id="pnlPct"></div></div>
+    </div>
+    <div class="vbar" id="valueBar"><i id="invBar" style="width:0"></i><i id="pnlBar" style="width:0"></i></div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="card">
+    <div class="seg"><button id="tToday" class="on" title="Day P&amp;L through the US session (IST)">Today</button><button id="tDaily" title="Closing day P&amp;L of each US trading day">Days</button><button id="tValue" title="Account value (holdings + cash) at each day's last sync">Account</button></div>
+    <div class="chartbox"><canvas id="chart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <div class="hhead">
+      <h2>Holdings <span class="cnt" id="count"></span></h2>
+      <div class="seg"><button id="vDay" class="on" title="Change today">Day</button><button id="vTot" title="Change since bought">Total</button></div>
+    </div>
+    <div class="hl" id="rows"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<script>
+let D = null, cur = 'USD', tab = 'today', view = 'day', sortK = 'market_value', sortDir = -1, chart = null, timer = null;
+try { cur = localStorage.getItem('usCur') || 'USD'; tab = localStorage.getItem('usTab') || 'today'; view = localStorage.getItem('usView') || 'day'; } catch (e) {}
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const rate = () => (D && D.usd_inr) || 0;
+const conv = (x, fx) => cur === 'INR' ? x * (fx || rate()) : x;
+function money(x, fx) {
+  if (x === null || x === undefined || isNaN(x)) return '–';
+  const v = conv(Number(x), fx);
+  return cur === 'INR'
+    ? (v < 0 ? '-₹' : '₹') + Math.abs(v).toLocaleString('en-IN', {maximumFractionDigits: 0})
+    : (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+// big numbers: $ with K / M, ₹ with L / Cr
+function big(x) {
+  if (x === null || x === undefined || isNaN(x)) return '–';
+  const v = conv(Number(x)), a = Math.abs(v), s = v < 0 ? '-' : '';
+  if (cur === 'INR') return a >= 1e7 ? s + '₹' + (a / 1e7).toFixed(2) + ' Cr' : a >= 1e5 ? s + '₹' + (a / 1e5).toFixed(2) + ' L' : money(x);
+  return a >= 1e6 ? s + '$' + (a / 1e6).toFixed(2) + 'M' : a >= 1e4 ? s + '$' + (a / 1e3).toFixed(1) + 'K' : s + '$' + Math.round(a).toLocaleString('en-US');
+}
+// coloured figures carry no + / −: green and red already say which way
+const mag = x => x == null ? '–' : money(Math.abs(x)), bmag = x => x == null ? '–' : big(Math.abs(x));
+const cls = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+const arrow = x => x < 0 ? '▼' : '▲';
+const apct = (a, b) => b ? Math.abs(a / b * 100).toFixed(2) + '%' : '';
+
+const ICONS = {
+  live: '<path d="M5 12a7 7 0 0 1 2-5M19 12a7 7 0 0 0-2-5M8.5 12a3.5 3.5 0 0 1 1-2.5M15.5 12a3.5 3.5 0 0 0-1-2.5"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><path d="M12 14v6"/>',
+  closed: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  stale: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>',
+  err: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',
+  stack: '<path d="M12 4l8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4M4 16l8 4 8-4"/>',
+  cash: '<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9v.01M18 15v.01"/>',
+  acct: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 15h2"/>',
+  fx: '<path d="M7 7h12l-3-3M17 17H5l3 3"/>'};
+const icon = (k, title) => `<svg class="ic ${k}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${esc(title)}"><title>${esc(title)}</title>${ICONS[k]}</svg>`;
+
+function render() {
+  if (!D) return;
+  $('cUSD').className = cur === 'USD' ? 'on' : ''; $('cINR').className = cur === 'INR' ? 'on' : '';
+  const s = D.summary || {}, pnl = D.value - D.invested;
+  $('value').textContent = big(D.value);
+  $('invested').textContent = big(D.invested) + ' invested';
+  $('pnl').innerHTML = `<span class="${cls(pnl)}">${bmag(pnl)}</span>`;
+  $('pnlPct').innerHTML = `<span class="${cls(pnl)}">${arrow(pnl)} ${apct(pnl, D.invested)}</span>`;
+  $('day').innerHTML = s.daily_pnl == null ? '–' : `<span class="${cls(s.daily_pnl)}">${bmag(s.daily_pnl)}</span>`;
+  $('dayPct').innerHTML = s.daily_pnl == null ? '' : `<span class="${cls(s.daily_pnl)}">${arrow(s.daily_pnl)} ${apct(s.daily_pnl, D.value - s.daily_pnl)}</span>`;
+  const tot = Math.max(D.invested, D.value) || 1;
+  $('invBar').style.width = (Math.min(D.invested, D.value) / tot * 100) + '%';
+  $('pnlBar').style.width = (Math.abs(pnl) / tot * 100) + '%'; $('pnlBar').className = pnl < 0 ? 'down' : 'up';
+  const ps = D.positions || [], ups = ps.filter(p => p.daily_pnl > 0).length, downs = ps.filter(p => p.daily_pnl < 0).length;
+  $('chips').innerHTML = `<span class="chip" title="Holdings">${icon('stack', 'Holdings')}<b>${ps.length}</b></span>` +
+    `<span class="chip" title="Cash, not invested">${icon('cash', 'Cash')}<b>${big(s.cash)}</b></span>` +
+    `<span class="chip" title="Account value: holdings + cash">${icon('acct', 'Account value')}<b>${big(s.net_liquidation)}</b></span>` +
+    (D.usd_inr ? `<span class="chip" title="USD / INR reference rate">${icon('fx', 'USD / INR')}<b>₹${D.usd_inr.toFixed(2)}</b></span>` : '') +
+    (ps.length ? `<span class="chip up" title="Holdings up today">▲ ${ups}</span><span class="chip down" title="Holdings down today">▼ ${downs}</span>` : '');
+  $('count').textContent = ps.length || '';
+  drawRows();
+  drawChart();
+}
+
+const COLS = [['symbol', 'Stock'], ['price', 'Price'], ['chg', 'Day'], ['market_value', 'Value', 'w'], ['weight', 'Weight', 'w']];
+function drawRows() {
+  const rows = D.positions.map(p => Object.assign({}, p, {weight: D.value ? (p.market_value || 0) / D.value : 0,
+    chg: view === 'day' ? p.daily_pnl : p.unrealized_pnl}));
+  rows.sort((a, b) => { const x = a[sortK], y = b[sortK]; return (typeof x === 'string' ? x.localeCompare(y) : (x || 0) - (y || 0)) * sortDir; });
+  const hd = `<div class="hr hd">${COLS.map(([k, l, w]) => `<span data-k="${k}" class="${w || ''}${k === sortK ? ' on' : ''}">${k === 'chg' ? (view === 'day' ? 'Today' : 'Total') : l}${k === sortK ? (sortDir > 0 ? ' ↑' : ' ↓') : ''}</span>`).join('')}</div>`;
+  const maxw = Math.max(1e-9, ...rows.map(r => r.weight));
+  $('rows').innerHTML = rows.length ? hd + rows.map(p => {
+    const cost = (p.qty || 0) * (p.avg_cost || 0), a = p.chg;
+    const base = view === 'day' ? (p.market_value || 0) - (p.daily_pnl || 0) : cost;
+    return `<div class="hr">
+      <span><span class="nm">${esc(p.symbol)}</span><small>${p.qty} shares · avg ${money(p.avg_cost)}</small></span>
+      <span>${money(p.price)}<small class="vs">${big(p.market_value)}</small></span>
+      <span class="pv ${cls(a)}">${mag(a)}<small class="${cls(a)}">${a == null ? '' : apct(a, base)}</small></span>
+      <span class="w">${big(p.market_value)}</span>
+      <span class="w">${(p.weight * 100).toFixed(1)}%<span class="wbar"><i style="width:${(p.weight / maxw * 100).toFixed(0)}%"></i></span></span>
+    </div>`; }).join('') : '<div class="empty">No US holdings</div>';
+  for (const [id, v] of [['vDay', 'day'], ['vTot', 'total']]) $(id).className = view === v ? 'on' : '';
+}
+$('rows').onclick = e => {
+  const h = e.target.closest('[data-k]'); if (!h) return;
+  const k = h.dataset.k; sortDir = sortK === k ? -sortDir : (k === 'symbol' ? 1 : -1); sortK = k; drawRows(); };
+for (const [id, v] of [['vDay', 'day'], ['vTot', 'total']]) $(id).onclick = () => { view = v; try { localStorage.setItem('usView', v); } catch (e) {} if (D) drawRows(); };
+
+function drawChart() {
+  ['tToday', 'tDaily', 'tValue'].forEach(id => $(id).className = id === {today: 'tToday', daily: 'tDaily', value: 'tValue'}[tab] ? 'on' : '');
+  let labels, vals, type = 'line';
+  if (tab === 'today') {
+    labels = D.intraday.map(r => window.TZ ? TZ.hm(r.t) : r.t); vals = D.intraday.map(r => conv(r.daily_pnl, r.usd_inr));
+  } else if (tab === 'daily') {
+    const d = D.days.filter(r => r.daily_pnl != null).slice(-60);
+    labels = d.map(r => r.day.slice(5)); vals = d.map(r => conv(r.daily_pnl, r.usd_inr)); type = 'bar';
+  } else {
+    const d = D.days.filter(r => r.net_liq != null);
+    labels = d.map(r => r.day.slice(5)); vals = d.map(r => conv(r.net_liq, r.usd_inr));
+  }
+  const css = getComputedStyle(document.documentElement), up = css.getPropertyValue('--up').trim(),
+        down = css.getPropertyValue('--down').trim(), acc = css.getPropertyValue('--accent').trim(),
+        grid = css.getPropertyValue('--line').trim(), muted = css.getPropertyValue('--muted').trim();
+  const color = tab === 'value' ? acc : (vals.length && vals[vals.length - 1] < 0 ? down : up);
+  if (chart) chart.destroy();
+  chart = new Chart($('chart'), {
+    type, data: {labels, datasets: [{data: vals, borderColor: color, borderWidth: type === 'bar' ? 0 : 2, pointRadius: 0, tension: .25,
+      backgroundColor: type === 'bar' ? vals.map(v => v < 0 ? down : up) : 'transparent'}]},
+    options: {maintainAspectRatio: false, animation: false, plugins: {legend: {display: false},
+      tooltip: {callbacks: {label: c => money(cur === 'INR' ? c.raw / rate() : c.raw)}}},
+      scales: {x: {grid: {display: false}, ticks: {color: muted, maxTicksLimit: 6}}, y: {grid: {color: grid}, ticks: {color: muted, maxTicksLimit: 6,
+        callback: v => (v < 0 ? '-' : '') + (cur === 'INR' ? '₹' : '$') + new Intl.NumberFormat('en-IN', {notation: 'compact', maximumFractionDigits: 1}).format(Math.abs(v))}}}}
+  });
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/us');
+    if (r.status === 401) { location.href = '/signin?next=/us'; return; }
+    const j = await r.json();
+    if (!j.ok) { $('errBox').innerHTML = icon('err', 'Error') + esc(j.error); $('errBox').classList.remove('hide');
+      $('stIc').innerHTML = icon('err', 'No data'); $('status').textContent = 'No data'; return; }
+    D = j;
+    const [k, title] = j.stale ? ['stale', 'No recent update'] : j.in_window ? ['live', 'US market open: updating'] : ['closed', 'US market closed'];
+    $('stIc').innerHTML = icon(k, title);
+    $('status').innerHTML = `<b>${esc(window.TZ ? TZ.hm(j.updated_ist) : ((/(\d{1,2}:\d\d)/.exec(j.updated_ist || '') || [])[1] || '–'))}</b>`;
+    $('status').title = 'Last update ' + (j.updated_ist || '') + ' IST · prices from IBKR, every minute 18:30–02:00 IST on US market days';
+    if (j.stale) {
+      $('errBox').innerHTML = icon('key', 'Login needed') + '<b>No update for ' + Math.round(j.age_min) + ' min.</b> The IBKR gateway probably needs a login: on the Mac run <code>ibkr-login</code>, log in, then <code>ibkr-done</code>.';
+      $('errBox').classList.remove('hide');
+    } else $('errBox').classList.add('hide');
+    render();
+    clearInterval(timer); timer = setInterval(load, j.in_window ? 30000 : 600000);
+  } catch (e) { $('stIc').innerHTML = icon('err', 'Could not reach the dashboard'); $('status').textContent = 'Offline'; }
+}
+
+$('cUSD').onclick = () => { cur = 'USD'; try { localStorage.setItem('usCur', cur); } catch (e) {} render(); };
+$('cINR').onclick = () => { cur = 'INR'; try { localStorage.setItem('usCur', cur); } catch (e) {} render(); };
+[['tToday', 'today'], ['tDaily', 'daily'], ['tValue', 'value']].forEach(([id, t]) => $(id).onclick = () => {
+  tab = t; try { localStorage.setItem('usTab', t); } catch (e) {} if (D) drawChart(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+load();
+</script>
+</body>
+</html>

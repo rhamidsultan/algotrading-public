@@ -1,0 +1,39 @@
+#!/bin/bash
+# Opens the IBKR gateway's screen (on the server) on this Mac, so you can see and finish its login.
+#   ibkr-login            open the gateway's screen
+#   ibkr-login --restart  restart the gateway first (a fresh login attempt), then open its screen
+# When IBKR Mobile has approved the login and the gateway shows it is connected, run: ibkr-done
+# the server and key saved by the Mac launchers (~/.algo-trading/server.env), unless given here
+CONF="${ALGO_SERVER_CONF:-$HOME/.algo-trading/server.env}"; [ -f "$CONF" ] && . "$CONF"
+KEY="${IBKR_SERVER_KEY:-${ALGO_KEY:-}}"
+HOST="${IBKR_SERVER:-${ALGO_HOST:-}}"
+[ -n "$HOST" ] || { echo "No server set yet: open deploy/update-server.command once (it asks), or put ALGO_HOST=\"ubuntu@<address>\" in $CONF"; exit 1; }
+SOCK="$HOME/.ssh/ibkr-vnc.sock"
+PORT=5901
+chmod 600 "$KEY" 2>/dev/null
+SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20)
+
+if [ "$1" = "--restart" ]; then
+  echo "Restarting the IBKR gateway..."
+  "${SSH[@]}" "$HOST" 'sudo docker restart $(sudo docker ps -a --format "{{.Names}}" | grep -m1 ib-gateway) >/dev/null' || exit 1
+  echo "Waiting 45 seconds for it to start..."; sleep 45
+fi
+
+# a private tunnel: this Mac's port 5901 -> the gateway's screen (port 5900, reachable only on the server)
+ssh -S "$SOCK" -O check "$HOST" 2>/dev/null || \
+  "${SSH[@]}" -f -N -M -S "$SOCK" -o ExitOnForwardFailure=yes -L "$PORT:127.0.0.1:5900" "$HOST" || { echo "Could not connect to the server."; exit 1; }
+
+# the screen's password, from the server's ~/ibkr/.env, onto the clipboard (never shown)
+PW="$("${SSH[@]}" "$HOST" 'grep -m1 "^VNC_SERVER_PASSWORD=" ~/ibkr/.env | cut -d= -f2- | tr -d "\"\047"')"
+if [ -n "$PW" ]; then printf '%s' "$PW" | pbcopy; echo "The screen password is on your clipboard: paste it (Cmd+V) when Screen Sharing asks."; fi
+unset PW
+
+open "vnc://localhost:$PORT"
+cat <<TXT
+
+Screen Sharing is opening the IBKR gateway's window.
+  - If it shows the login form, check the user name, then click Log In.
+  - Approve the request in IBKR Mobile on your iPhone.
+  - If a message or dialog is showing, read it (or send me a screenshot).
+When the gateway is logged in, close Screen Sharing and run:  ibkr-done
+TXT

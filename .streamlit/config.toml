@@ -1,0 +1,12 @@
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+# Buttons, the active tab and sliders: reds that keep white text readable (Streamlit's default #ff4b4b is 3.3:1)
+[theme.light]
+primaryColor = "#c81e1e"
+
+[theme.dark]
+primaryColor = "#d93636"

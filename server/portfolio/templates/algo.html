@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Algo (paper)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#646b78;--line:#e5e7eb;--up:#087a4c;--down:#c8323a;--accent:#2f6fed;--warn:#a06a1a}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#e8eaee;--muted:#8b93a1;--line:#272b35;--up:#34c98a;--down:#f0626a;--accent:#6c9bff;--warn:#e0b34a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+h1{font-size:20px;margin:0}
+h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600}
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.status a{color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
+.dot.live{background:var(--up)}.dot.bad{background:var(--down)}.dot.warn{background:var(--warn)}
+.tag{font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid var(--warn);color:var(--warn);margin-left:6px;vertical-align:middle}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.card .big{font-size:22px;font-weight:650;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .sub{font-size:13px;margin-top:2px;color:var(--muted);font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.down{color:var(--down)}
+.grid2{display:grid;grid-template-columns:3fr 2fr;gap:12px;margin-top:12px}
+.section{margin-top:12px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;color:var(--muted);font-weight:600}
+td.wrapcell{white-space:normal;text-align:left;min-width:220px}
+dl{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;font-size:14px;font-variant-numeric:tabular-nums}
+dt{color:var(--muted)}dd{margin:0;text-align:right}
+.chartbox{height:220px;position:relative}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+.btn.danger{background:var(--down)}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.events{list-style:none;margin:0;padding:0;max-height:340px;overflow:auto}
+.events li{padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+.events small{color:var(--muted);display:block;font-size:12px}
+.lvl{font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-right:6px;font-weight:600}
+.lvl.trade{color:var(--accent)}.lvl.skip,.lvl.warn{color:var(--warn)}.lvl.error{color:var(--down)}.lvl.info{color:var(--muted)}
+.banner{background:var(--card);border:1px solid var(--warn);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+.note{color:var(--muted);font-size:12px;margin-top:8px}
+.hide{display:none}
+th.l{text-align:left}
+.sym{display:block;color:var(--muted);font-size:12px}
+@media (max-width:760px){.cards{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.card .big{font-size:19px}#legsTable th,#legsTable td{padding:8px 4px;font-size:14px}.sym{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Blaze Butterfly <span class="tag">PAPER</span></h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Loading…</span> · <a href="/">Portfolio</a> · <a href="/backtests">Backtests</a> · <a href="/signout">Sign out</a></div>
+  </header>
+
+  <div class="banner hide" id="banner"></div>
+
+  <div class="cards">
+    <div class="card"><div class="label">This week</div><div class="big" id="cState">–</div><div class="sub" id="cStateSub"></div></div>
+    <div class="card"><div class="label">Run P&amp;L</div><div class="big" id="cRun">–</div><div class="sub" id="cRunSub"></div></div>
+    <div class="card"><div class="label">Total paper P&amp;L</div><div class="big" id="cTotal">–</div><div class="sub" id="cTotalSub"></div></div>
+    <div class="card"><div class="label">Next entry</div><div class="big" id="cNext" style="font-size:17px">–</div><div class="sub" id="cNextSub"></div></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2 id="legsTitle">Position</h2>
+      <div class="scroll"><table id="legsTable">
+        <thead><tr><th>Leg</th><th>Qty</th><th>Entry</th><th id="ltpHead">LTP</th><th>P&amp;L</th></tr></thead>
+        <tbody id="legs"><tr><td colspan="5" style="text-align:left;color:var(--muted)">No position yet.</td></tr></tbody>
+      </table></div>
+      <div class="chartbox section"><canvas id="chart"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Rules in force</h2>
+      <dl id="rules"></dl>
+      <div class="controls section">
+        <button class="btn ghost" id="pauseBtn" type="button">Pause new entries</button>
+        <button class="btn danger" id="sqBtn" type="button">Square off now</button>
+      </div>
+      <div class="note" id="ctlNote">Pause stops new weekly entries; an open position still follows its exits. Square off closes the paper position at the current bid/ask.</div>
+    </div>
+  </div>
+
+  <div class="card section">
+    <h2>Weekly runs</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Entered</th><th>P&amp;L</th><th>Cumulative</th><th class="l">Exit reason</th><th>Strikes (K1 / K2 / K3)</th><th>Net premium</th><th>Expiry</th><th>Exit</th></tr></thead>
+      <tbody id="runs"><tr><td colspan="8" style="text-align:left;color:var(--muted)">No completed runs yet.</td></tr></tbody>
+    </table></div>
+    <div class="note">P&amp;L is gross: before brokerage, STT, exchange charges and GST. Paper fills: buys at the best ask, sells at the best bid.</div>
+  </div>
+
+  <div class="card section">
+    <h2>Activity</h2>
+    <ul class="events" id="events"></ul>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const inr = (x, d = 0) => (x < 0 ? '−' : '') + '₹' + Math.abs(x).toLocaleString('en-IN', {maximumFractionDigits: d, minimumFractionDigits: d});
+const cls = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+const hm = n => String(n).padStart(4, '0').replace(/(\d\d)(\d\d)/, '$1:$2');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+let chart, data, sqArmed = 0;
+
+function setPnl(el, v) { el.textContent = v == null ? '–' : inr(v); el.className = 'big ' + cls(v || 0); }
+
+function render(d) {
+  data = d;
+  if (!d.installed) {
+    $('status').textContent = 'Paper engine not installed yet';
+    $('dot').className = 'dot bad';
+    $('banner').textContent = 'The paper engine has not run on this machine yet. Install it with deploy.sh (see README).';
+    $('banner').classList.remove('hide');
+    return;
+  }
+  const rt = d.runtime, s = d.settings;
+  const alive = d.heartbeat_age != null && d.heartbeat_age < 120;
+  let st = alive ? 'Engine running' : 'Engine not running';
+  let dot = alive ? 'live' : 'bad';
+  if (alive && rt.login_wait) { st = 'Waiting for today\'s Zerodha login'; dot = 'warn'; }
+  if (alive && rt.paused) { st += ' · new entries paused'; dot = 'warn'; }
+  $('status').textContent = st; $('dot').className = 'dot ' + dot;
+  const warn = [];
+  if (!alive) warn.push('The paper engine has not checked in for ' + (d.heartbeat_age == null ? 'ever' : Math.round(d.heartbeat_age / 60) + ' min') + '. On the server: <code>sudo systemctl status trader-paper</code>.');
+  if (alive && rt.login_wait) warn.push('Prices are unavailable until today\'s Zerodha login is done (morning login page or the Portfolio page).');
+  if (d.pending.includes('squareoff')) warn.push('Square-off is queued and will run when the market is open.');
+  $('banner').innerHTML = warn.join('<br>'); $('banner').classList.toggle('hide', !warn.length);
+
+  // cards
+  const cur = d.current, last = d.last;
+  if (cur) {
+    $('cState').textContent = 'In position';
+    $('cStateSub').textContent = `${cur.k1} / ${cur.k2} / ${cur.k3} PE · exp ${cur.expiry}`;
+  } else if (d.skip_note) {
+    $('cState').textContent = 'Skipped';
+    $('cStateSub').textContent = d.skip_note;
+  } else {
+    $('cState').textContent = 'Flat';
+    $('cStateSub').textContent = last ? `Last run closed ${last.exit_ts || ''}` : 'No runs yet';
+  }
+  const runPnl = cur ? cur.pnl : (last ? last.pnl : null);
+  setPnl($('cRun'), runPnl);
+  $('cRunSub').textContent = cur ? `Target ${inr(cur.tgt_amt)} · stop ${inr(cur.stop_amt)}` : (last ? 'last run: ' + (last.exit_reason || '') : '');
+  setPnl($('cTotal'), d.stats.total);
+  $('cTotalSub').textContent = `${d.stats.runs} runs · ${d.stats.wins} won · ${d.stats.skips} weeks skipped`;
+  $('cNext').textContent = d.next_entry || '–';
+  $('cNextSub').textContent = `${hm(s.entry_start)}–${hm(s.entry_end)} IST` + (s.permit_mode === 1 ? ' · needs permit_date' : '');
+
+  // legs
+  const legs = d.legs;
+  $('legsTitle').textContent = cur ? 'Open position' : (last ? 'Last position (closed)' : 'Position');
+  $('ltpHead').textContent = cur ? 'LTP' : 'Exit';
+  if (legs.length) {
+    $('legs').innerHTML = legs.map(x => {
+      const px = x.status === 'closed' ? x.exit_px : x.ltp;
+      return `<tr><td>${x.side === 'B' ? 'Buy' : 'Sell'} ${x.strike} PE<small class="sym">${esc(x.symbol)} · ${x.lots} lot${x.lots == 1 ? '' : 's'}</small></td>
+        <td>${x.qty}</td><td>${x.entry_px.toFixed(2)}</td><td>${(px || 0).toFixed(2)}</td><td class="${cls(x.pnl)}">${inr(x.pnl)}</td></tr>`;
+    }).join('');
+  }
+
+  // rules
+  const pct = x => (x * 100).toFixed(1) + '%';
+  const m = s.margin_per_unit * s.multiplier;
+  const rows = [
+    ['Margin per unit', inr(s.margin_per_unit)],
+    ['Multiplier', s.multiplier],
+    ['Entry window', `${['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'][rt.entry_wd]} ${hm(s.entry_start)}–${hm(s.entry_end)}`],
+    ['Premium band / unit', `${inr(-s.debit_cap_pct * s.margin_per_unit)} to ${inr(s.credit_cap_pct * s.margin_per_unit)}`],
+    ['Target / stop', `+${inr(s.target_pct * m)} / −${inr(s.stop_pct * m)}`],
+    ['Crossing exit', `${['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'][rt.cross_wd]}, NIFTY ≤ K1`],
+    ['Time exit', `${hm(s.exit_time)} last trading day of week`],
+    ['Weekly permission', s.permit_mode === 2 ? 'always' : `only on ${s.permit_date}`],
+  ];
+  if (rt.ref_r) rows.push(['Last selection', `R ${rt.ref_r}, shift ${rt.shift_sel}, ${inr(rt.net_prem)}/unit`]);
+  $('rules').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  $('pauseBtn').textContent = rt.paused ? 'Resume new entries' : 'Pause new entries';
+  $('sqBtn').disabled = !cur; $('sqBtn').style.opacity = cur ? 1 : .45;
+
+  // runs
+  const closed = d.runs.slice().reverse();
+  let cum = 0;
+  const rr = closed.map(r => {
+    if (r.status === 'closed') cum += r.pnl || 0;
+    const net = r.filled_net != null ? r.filled_net : r.planned_net;
+    return `<tr><td>${r.entered_date}</td><td class="${cls(r.pnl)}">${inr(r.pnl || 0)}</td>
+      <td class="${cls(cum)}">${r.status === 'closed' ? inr(cum) : 'open'}</td>
+      <td class="wrapcell">${esc(r.exit_reason || '')}</td><td>${r.k1} / ${r.k2} / ${r.k3}</td>
+      <td class="${cls(net)}">${inr(net)}</td><td>${r.expiry}</td><td>${r.exit_ts ? r.exit_ts.slice(5, 16) : 'open'}</td></tr>`;
+  }).reverse();
+  if (rr.length) $('runs').innerHTML = rr.join('');
+
+  drawChart(d.mtm, cur || last);
+  $('events').innerHTML = d.events.map(e => `<li><span class="lvl ${e.level}">${e.level}</span>${esc(e.msg)}<small>${e.ts}</small></li>`).join('') || '<li>No activity yet.</li>';
+}
+
+function drawChart(mtm, run) {
+  if (typeof Chart === 'undefined') return;
+  const css = getComputedStyle(document.documentElement);
+  const labels = mtm.map(r => r.ts.slice(5));
+  const vals = mtm.map(r => r.pnl);
+  const ds = [{label: 'Run P&L', data: vals, borderColor: css.getPropertyValue('--accent'), borderWidth: 2, pointRadius: 0, tension: .2}];
+  if (run) {
+    ds.push({label: 'Target', data: vals.map(() => run.tgt_amt), borderColor: css.getPropertyValue('--up'), borderDash: [4, 4], borderWidth: 1, pointRadius: 0});
+    ds.push({label: 'Stop', data: vals.map(() => run.stop_amt), borderColor: css.getPropertyValue('--down'), borderDash: [4, 4], borderWidth: 1, pointRadius: 0});
+  }
+  if (!chart) {
+    chart = new Chart($('chart'), {type: 'line', data: {labels, datasets: ds},
+      options: {animation: false, maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
+        plugins: {legend: {labels: {color: css.getPropertyValue('--muted'), boxWidth: 12}},
+                  tooltip: {callbacks: {label: c => c.dataset.label + ': ' + inr(c.parsed.y)}}},
+        scales: {x: {ticks: {color: css.getPropertyValue('--muted'), maxTicksLimit: 6}, grid: {display: false}},
+                 y: {ticks: {color: css.getPropertyValue('--muted'), callback: v => inr(v)}, grid: {color: css.getPropertyValue('--line')}}}}});
+  } else {
+    chart.data.labels = labels; chart.data.datasets = ds; chart.update();
+  }
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/algo');
+    if (r.status === 401) { location.href = '/signin?next=/algo'; return; }
+    render(await r.json());
+  } catch (e) { $('status').textContent = 'Could not reach the dashboard'; $('dot').className = 'dot bad'; }
+}
+
+async function send(cmd) {
+  const r = await fetch('/api/algo/command', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cmd})});
+  const j = await r.json();
+  $('ctlNote').textContent = j.ok ? 'Sent. The engine picks it up within a few seconds.' : (j.error || 'Failed');
+  setTimeout(load, 3000);
+}
+
+$('pauseBtn').onclick = () => send(data && data.runtime.paused ? 'resume' : 'pause');
+$('sqBtn').onclick = () => {
+  if (Date.now() - sqArmed < 5000) { sqArmed = 0; $('sqBtn').textContent = 'Square off now'; send('squareoff'); return; }
+  sqArmed = Date.now(); $('sqBtn').textContent = 'Tap again to confirm';
+  setTimeout(() => { if (sqArmed && Date.now() - sqArmed >= 5000) { sqArmed = 0; $('sqBtn').textContent = 'Square off now'; } }, 5100);
+};
+
+load();
+setInterval(() => { if (!document.hidden) load(); }, 10000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+</script>
+</body>
+</html>

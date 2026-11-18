@@ -1,0 +1,99 @@
+# Platform settings. Edit and restart. All percentages are in percent (0.15 = 0.15%).
+market:
+  underlying: NIFTY
+  lot_size: 65            # NIFTY lot from Jan 2026 (live mode reads it from Zerodha)
+  strike_step: 50
+  tick_size: 0.05
+  expiry_rules:           # weekly expiry weekday (0=Mon .. 6=Sun) and the date it took effect
+    - {from: "2000-01-01", weekday: 3}   # Thursday
+    - {from: "2025-09-01", weekday: 1}   # Tuesday
+  lot_size_schedule:      # NIFTY lot by contract EXPIRY date (backtests; live reads Zerodha)
+    - {from: "2000-01-01", size: 50}
+    - {from: "2024-04-26", size: 25}     # NSE cut the lot to 25 from 26 Apr 2024
+    - {from: "2025-01-01", size: 75}     # contracts listed from 20 Nov 2024; first weeklies ~Jan 2025
+    - {from: "2026-01-01", size: 65}     # weeklies from the 6 Jan 2026 expiry
+  holidays:               # NSE weekday holidays (only used for dates outside your stored data)
+    - "2026-01-15"
+    - "2026-01-26"
+    - "2026-03-03"
+    - "2026-03-26"
+    - "2026-03-31"
+    - "2026-04-03"
+    - "2026-04-14"
+    - "2026-05-01"
+    - "2026-05-28"
+    - "2026-06-26"
+    - "2026-09-14"
+    - "2026-10-02"
+    - "2026-10-20"
+    - "2026-11-10"
+    - "2026-11-24"
+    - "2026-12-25"
+
+account:
+  capital: 300000         # rupees; returns and drawdown are measured against this
+  margin:                 # backtest estimate (algolab/margin_est.py); live margins come from Zerodha
+    span_pct: 6.0         # % of NIFTY x quantity per sold option (with exposure_pct: about Zerodha near the money)
+    exposure_pct: 2.0
+    check: warn           # warn = count entries beyond the account's equity; refuse = also skip them
+
+execution:
+  slippage_pct: 0.5       # % of premium lost per fill when no live bid/ask is available
+  intrabar: ohlc          # ohlc = check stops at each bar's open, high, low and close; close = close only
+  min_half_spread: [[20, 0.10], [100, 0.20]]   # without bid/ask: at least Rs 0.10 per side under Rs 20, 0.20 under 100
+  cost_stress: 1.0        # x the spread / slippage; 2 = conservative (Algo Lab "Fills: Conservative")
+  fill_delay_seconds: 0   # fill at the price this long after the decision (Conservative: 60)
+  fill_max_age_minutes: 3 # a fill needs a trade at most this old; otherwise it waits for the next trade (15 min)
+  option_intrabar: true   # inside a bar, options follow their TrueData high/low too (stops touched mid-bar are hit)
+  liquidity:              # uses TrueData volume when its raw candles are stored (data/truedata/options)
+    min_volume_today: 0   # strikes with fewer contracts traded so far today are not offered (0 = off)
+    max_share_of_volume: 0.1  # count orders over 10% of the contracts traded in the last window_minutes
+    window_minutes: 5
+
+costs:                    # Zerodha F&O options - verify on zerodha.com/charges
+  brokerage_per_order: 20
+  stt_sell_pct: 0.15      # on sell-side premium (rate from 1 Apr 2026)
+  stt_exercise_pct: 0.15  # on intrinsic value of long options that expire in the money
+  exchange_txn_pct: 0.03553
+  sebi_pct: 0.0001
+  stamp_buy_pct: 0.003
+  gst_pct: 18             # on brokerage + exchange + SEBI fees
+
+cost_history:             # earlier rates; a trade before `until` uses the first entry it falls under
+  - {until: "2024-10-01", stt_sell_pct: 0.0625, stt_exercise_pct: 0.125, exchange_txn_pct: 0.0495}
+  - {until: "2026-04-01", stt_sell_pct: 0.1, stt_exercise_pct: 0.125, exchange_txn_pct: 0.03503}
+
+pricing:                  # used when no recorded option price exists
+  risk_free_rate: 0.065
+  dividend_yield: 0.012
+  iv_scale: 1.0           # option IV = India VIX x this
+  fallback_iv: 0.13       # if VIX is missing
+  overnight_variance_share: 0.3   # share of a day's option decay that happens overnight
+  smile: auto             # auto = correct estimates with NSE closing prices when imported (run.py import-nse); off = plain VIX
+  real_only: true         # backtests and replays use only real option prices (Zerodha, TrueData), on the days that have them
+
+collect:                  # server: real option prices stored after each close (run.py collect)
+  strikes_each_side: 10   # calls and puts this many strikes above / below ATM (50 points each)
+  puts_below: 30          # puts reach this far below ATM (1,500 points: the Blaze Butterfly's far wing)
+  expiries: 2             # nearest weekly expiries (this week and next)
+  days: 7                 # candles from the last N days are (re)saved each run
+
+sec1:                     # server: 1-second bars from Zerodha's live stream (algolab/sec1.py), for paper-vs-backtest checks
+  record: true            # recorded while the paper engine runs on Zerodha prices (needs the day's login)
+  strikes_each_side: 30   # calls and puts this many strikes around the money ...
+  expiries: 2             # ... on this many nearest weekly expiries, plus every option a session uses
+  keep_trading_days: 5    # older days are deleted after the close (run.py collect / run.py sec1 prune)
+
+paper:
+  price_source: stream    # stream = Zerodha's live price stream (falls back to polling); poll = quote requests only
+  stream_step_seconds: 1  # with the stream: strategies are stepped this often
+  stream_stale_seconds: 5 # no data from the stream for this long -> poll until it is back
+  stream_keep_seconds: 300   # an option stays subscribed this long after a strategy last asked for it
+  record_band: true       # with the stream: record bid/ask every minute near the money (collect: strikes)
+  live_poll_seconds: 2    # how often live prices are fetched when polling
+  sim_seconds_per_bar: 0.5
+
+server:                   # your server, for "Get data from server" when backtesting on the Mac
+  host: ""                # e.g. ubuntu@YOUR_SERVER_IP
+  key_file: ""            # e.g. ~/.ssh/LightsailDefaultKey.pem
+  data_path: /opt/algolab/data

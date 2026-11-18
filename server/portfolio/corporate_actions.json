@@ -1,0 +1,52 @@
+[
+  {
+    "day": "2023-11-29", "type": "acquire", "symbol": "TATATECH", "units": 30, "price": 500,
+    "text": "IPO allotment: 30 Tata Technologies shares at ₹500 each. IPO shares do not appear in the tradebook.",
+    "basis": "Assumed. The 30 units are worked out from your later sale; the ₹500 is the IPO issue price."
+  },
+  {
+    "day": "2024-02-06", "type": "merge", "symbol": "TATAMETALI", "to": "TATASTEEL", "ratio": 7.9,
+    "text": "Tata Metaliks merged into Tata Steel: 79 Tata Steel shares for every 10 Tata Metaliks shares. Your cost carried over.",
+    "basis": "Checked: the units match what you later sold."
+  },
+  {
+    "day": "2024-04-09", "type": "acquire", "symbol": "SOUTHBANK", "units": 179, "price": 22,
+    "text": "Rights issue: 179 South Indian Bank shares at ₹22 each (1 for every 4 held, record date 27 Feb 2024).",
+    "basis": "Checked: units and average cost match Zerodha exactly."
+  },
+  {
+    "day": "2024-09-01", "type": "merge", "symbol": "TATAMTRDVR", "to": "TATAMOTORS", "units": 31,
+    "text": "Tata Motors DVR shares cancelled: 7 ordinary shares for every 10 DVR shares. Your 46 DVR shares became 31 ordinary shares, one fewer than the ratio gives. Your cost carried over.",
+    "basis": "Checked: the 31 is worked out from Zerodha's units and average cost, which then match exactly. The missing share was probably withheld for tax under the scheme."
+  },
+  {
+    "day": "2024-10-07", "type": "bonus", "symbol": "NBCC", "num": 1, "den": 2,
+    "text": "Bonus issue: 1 free NBCC share for every 2 held. Bonus shares are counted at zero cost.",
+    "basis": "Checked: the units match what you later sold."
+  },
+  {
+    "day": "2024-10-10", "type": "merge", "symbol": "IDFC", "to": "IDFCFIRSTB", "ratio": 1.55,
+    "text": "IDFC merged into IDFC First Bank: 155 IDFC First Bank shares for every 100 IDFC shares. Your cost carried over.",
+    "basis": "Checked: the units match what you later sold."
+  },
+  {
+    "day": "2024-10-28", "type": "split", "symbol": "DRREDDY", "mult": 5,
+    "text": "Stock split: each Dr. Reddy's share became 5 shares, at one fifth of the cost each.",
+    "basis": "Checked: units and average cost match Zerodha exactly."
+  },
+  {
+    "day": "2025-01-06", "type": "demerge", "symbol": "ITC", "to": "ITCHOTELS", "ratio": 0.1, "cost_pct": 13.51,
+    "text": "ITC Hotels demerged from ITC: 1 ITC Hotels share for every 10 ITC shares. 13.51% of your ITC cost moved to ITC Hotels and 86.49% stayed with ITC.",
+    "basis": "Checked: ITC's units and average cost match Zerodha exactly."
+  },
+  {
+    "day": "2025-10-14", "type": "demerge", "symbol": "TATAMOTORS", "to": "TMCV", "ratio": 1, "cost_pct": 31.15,
+    "text": "Tata Motors demerger: 1 commercial vehicles share (TMCV) for every Tata Motors share. 31.15% of your cost moved to TMCV and 68.85% stayed with the passenger vehicles company.",
+    "basis": "Checked: units and average cost of both TMCV and TMPV match Zerodha exactly."
+  },
+  {
+    "day": "2025-10-14", "type": "merge", "symbol": "TATAMOTORS", "to": "TMPV", "ratio": 1,
+    "text": "Tata Motors was renamed Tata Motors Passenger Vehicles (TMPV) after the demerger. Your remaining cost carried over.",
+    "basis": "Checked: units and average cost match Zerodha exactly."
+  }
+]

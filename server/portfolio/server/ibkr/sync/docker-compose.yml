@@ -1,0 +1,24 @@
+# IB Gateway (headless) with IBC auto-login, for the Lightsail server.
+# Phase 1: LIVE account in READ-ONLY API mode -> the API can read holdings but cannot place orders.
+# The API port is bound to 127.0.0.1 only: never expose it to the internet.
+name: ibkr
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: always
+    env_file: .env
+    environment:
+      TRADING_MODE: live
+      READ_ONLY_API: "yes"
+      TWOFA_TIMEOUT_ACTION: restart
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      AUTO_RESTART_TIME: "11:45 PM"          # daily soft restart, no 2FA needed (weekly re-login still needs 2FA)
+      EXISTING_SESSION_DETECTED_ACTION: secondary   # don't kick you out of the IBKR app on your phone
+      TIME_ZONE: Asia/Kolkata
+      TZ: Asia/Kolkata
+      JAVA_HEAP_SIZE: "768"
+    volumes:
+      - ./tws_settings:/home/ibgateway/tws_settings
+    ports:
+      - "127.0.0.1:4001:4003"   # live API (read-only)
+    mem_limit: 1200m

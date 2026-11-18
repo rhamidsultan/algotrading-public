@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock history</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#646b78;--line:#e5e7eb;--up:#087a4c;--down:#c8323a;--accent:#2f6fed;--gold:#c8961e;--s1:#2f6fed;--s2:#b5820c;--warn:#a06a1a}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#e8eaee;--muted:#8b93a1;--line:#272b35;--up:#34c98a;--down:#f0626a;--accent:#6c9bff;--gold:#e0b34a;--s1:#5a8af0;--s2:#b88a1e;--warn:#e0a84a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+h2{font-size:13px;margin:0;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:6px}
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+#sym{font:inherit;font-size:18px;font-weight:700;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:9px;padding:5px 8px;min-width:0;max-width:60vw}
+.acts{display:flex;gap:6px;margin-left:auto;flex:none}
+.ic{width:15px;height:15px;display:inline-block;vertical-align:-3px;flex:none}
+.ic.live{color:var(--up)}.ic.closed{color:var(--muted)}.ic.pause,.ic.key,.ic.warn{color:var(--warn)}.ic.err{color:var(--down)}
+.ibtn{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:36px;min-width:36px;padding:0 9px;border-radius:9px;
+  border:1px solid var(--line);color:var(--accent);background:var(--card);text-decoration:none;font:600 13px system-ui,-apple-system,sans-serif;cursor:pointer}
+.ibtn .ic{width:17px;height:17px;vertical-align:0;color:inherit}
+.ibtn:disabled{color:var(--muted);opacity:.45;cursor:default}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px}
+.up{color:var(--up)}.down{color:var(--down)}
+.hide{display:none!important}
+.nums{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;font-variant-numeric:tabular-nums}
+.nums .lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.nums .nv{font-size:20px;font-weight:700;line-height:1.25;white-space:nowrap}
+.nums>div:first-child .nv{font-size:23px}
+.nums .ns{font-size:12px;color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip b{color:var(--text);font-weight:600}.chip .ic{width:13px;height:13px;vertical-align:-2px}
+.chip.up b{color:var(--up)}.chip.down b{color:var(--down)}
+.fbtn{font:inherit;font-size:12px;background:transparent;cursor:pointer;min-height:30px}
+.fbtn.on{border-color:currentColor;background:color-mix(in srgb,currentColor 12%,transparent)}
+.chead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;gap:2px}
+.seg button{border:0;background:transparent;color:var(--muted);border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+.chead .seg+.seg{margin-left:auto}
+.chartbox{height:250px;position:relative;margin-top:10px}
+.lgd{display:flex;gap:4px 12px;font-size:12px;color:var(--muted);flex-wrap:wrap;margin-top:8px}
+.lgd span{display:inline-flex;align-items:center;gap:5px}
+.sw{display:inline-block;width:14px;height:3px;border-radius:2px}
+.sw.dash{background:repeating-linear-gradient(90deg,var(--s1) 0 5px,transparent 5px 8px)}
+.sw.thin{height:2px;background:var(--muted)}
+.sw.dot{height:2px;background:repeating-linear-gradient(90deg,var(--muted) 0 2px,transparent 2px 5px)}
+.ext{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:6px;font-variant-numeric:tabular-nums}
+.ext b{font-weight:650}
+/* trades: two-line rows */
+.tl{font-variant-numeric:tabular-nums;margin-top:6px}
+.tr{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:0 10px;align-items:center;padding:7px 2px;border-top:1px solid var(--line)}
+.tr .sd{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.sd.buy{color:var(--up);background:color-mix(in srgb,var(--up) 13%,transparent)}
+.sd.sell{color:var(--down);background:color-mix(in srgb,var(--down) 13%,transparent)}
+.tr b{font-weight:600;font-size:14px}.tr small{display:block;color:var(--muted);font-size:12px}
+.tr>span:last-child{text-align:right;font-weight:600}
+.pager{display:flex;justify-content:center;align-items:center;gap:12px;margin-top:8px;font-size:12.5px;color:var(--muted)}
+/* folded extras */
+details.sec>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary .chev{display:inline-flex;margin-left:auto;color:var(--muted);transition:transform .2s}
+details.sec[open]>summary .chev{transform:rotate(90deg)}
+.cnt{font-size:12px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0}
+ul.acts2,ul.notes{margin:10px 0 0;padding-left:18px;font-size:14px}
+ul.acts2 li,ul.notes li{margin-bottom:8px}
+ul.acts2 small{display:block;color:var(--muted);font-size:12px}
+ul.notes{color:var(--muted);font-size:13px}
+.note{color:var(--muted);font-size:12px;margin-top:8px}
+.banner{background:var(--card);border:1px solid var(--down);border-radius:12px;padding:12px 14px;margin-bottom:10px;font-size:14px}
+.banner.info{border-color:var(--line);color:var(--muted)}
+.banner .ic{width:16px;height:16px;margin-right:4px}
+.banner details{margin-top:6px;font-size:13px;color:var(--muted)}
+form.imp{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
+input[type=file]{max-width:100%;font-size:14px;color:var(--text)}
+.empty{color:var(--muted);font-size:14px;padding:8px 0}
+@media (max-width:760px){.nums .nv{font-size:17px}.nums>div:first-child .nv{font-size:19px}.chartbox{height:220px}}
+@media (max-width:380px){.seg button{padding:6px 9px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <select id="sym" aria-label="Stock"></select>
+    <div class="status"><span id="stIc"></span><span id="status" class="hide">Loading…</span></div>
+    <div class="acts"><a class="ibtn" id="liveBtn" href="/chart" title="Live chart"></a></div>
+  </header>
+
+  {% if message %}<div class="banner info">{{ message }}</div>{% endif %}
+  <div class="banner hide" id="reconBox"></div>
+  <div class="banner info hide" id="emptyBox"></div>
+
+  <div class="card" style="margin-top:0">
+    <div class="nums">
+      <div><div class="lbl">Value</div><div class="nv" id="value">–</div><div class="ns" id="ltp"></div></div>
+      <div><div class="lbl">P&amp;L</div><div class="nv" id="pnl">–</div><div class="ns" id="pnlPct"></div></div>
+      <div><div class="lbl">Invested</div><div class="nv" id="invested">–</div><div class="ns" id="since"></div></div>
+    </div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="card">
+    <div class="chead">
+      <div class="seg" id="views"><button data-v="value" class="on" title="Money invested and current value">Value</button><button data-v="pnl" title="Profit / loss over time">P&amp;L</button><button data-v="month" title="Money added each month: purchases minus sales">Added</button></div>
+      <div class="seg" id="ranges"><button data-r="90">3M</button><button data-r="365">1Y</button><button data-r="0" class="on">All</button></div>
+    </div>
+    <div class="chartbox"><canvas id="cMain"></canvas></div>
+    <div class="lgd" id="lgd"></div>
+    <div class="ext" id="ext"></div>
+  </div>
+
+  <div class="card">
+    <h2><span id="tIc"></span>Trades <span class="cnt" id="tCnt"></span></h2>
+    <div class="chips" id="tradeTotals"></div>
+    <div class="tl" id="trades"></div>
+    <div class="pager hide" id="pager">
+      <button class="ibtn" id="pgPrev" type="button" title="Newer"></button>
+      <span id="pgInfo"></span>
+      <button class="ibtn" id="pgNext" type="button" title="Older"></button>
+    </div>
+  </div>
+
+  <details class="card sec hide" id="actBox">
+    <summary><h2><span id="aIc"></span>Corporate actions <span class="cnt" id="aCnt"></span></h2><span class="chev"></span></summary>
+    <ul class="acts2" id="acts"></ul>
+    <div class="note">Entered by hand from company announcements and applied on the date shown. Later ones are not included until they are added.</div>
+  </details>
+
+  <details class="card sec" id="aboutBox">
+    <summary><h2><span id="iIc"></span>About these figures</h2><span class="chev"></span></summary>
+    <ul class="notes">
+      <li>For a stock you hold, the figures at the top are Zerodha's own. The graphs are rebuilt from your tradebook and the corporate actions. <span id="costNote"></span></li>
+      <li id="priceNote"></li>
+      <li>Money invested is the cost of the units still held, oldest units sold first. A buy and a sell of the same stock on the same day cancel each other first, as Zerodha treats them. Brokerage, taxes and other charges are not included.</li>
+      <li>Dividends and cash paid for fractional shares are not counted in profit or loss.</li>
+      <li>After a merger or demerger, cost moves between stocks without new money, so the invested line can jump with no bar in "Added".</li>
+      <li>Values before a split or bonus are restated to the share count of the time. Around a demerger, past prices may be adjusted by the data provider, so values before that date are approximate.</li>
+      <li>This is for tracking only and is not tax advice. For tax filing, use Zerodha Console's tax P&amp;L report.</li>
+    </ul>
+  </details>
+
+  <details class="card sec" id="impBox">
+    <summary><h2><span id="uIc"></span>Import tradebook</h2><span class="chev"></span></summary>
+    <div class="note">Equity tradebook files from Zerodha Console (Reports → Tradebook), Excel or CSV. Trades already stored are skipped; new trades are also recorded automatically each trading day.</div>
+    <form class="imp" method="post" action="/stock/import" enctype="multipart/form-data">
+      <input type="file" name="files" multiple accept=".xlsx,.csv" required aria-label="Tradebook files">
+      <button class="btn" type="submit">Import</button>
+    </form>
+  </details>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const inr = (x, d = 0) => '₹' + Number(x).toLocaleString('en-IN', {minimumFractionDigits: d, maximumFractionDigits: d});
+const signed = (x, d = 0) => (x >= 0 ? '+' : '−') + inr(Math.abs(x), d);
+const pct = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(2) + '%';
+// coloured figures carry no + / − : green and red already say which way
+const mag$ = x => inr(Math.abs(x)), apct = x => Math.abs(x).toFixed(2) + '%';
+const cls = x => x >= 0 ? 'up' : 'down';
+const arrow = x => x >= 0 ? '▲' : '▼';
+const compact = new Intl.NumberFormat('en-IN', {notation: 'compact', maximumFractionDigits: 1});
+const short = x => (x < 0 ? '−' : '') + '₹' + compact.format(Math.abs(x)).replace('T', 'K');
+// ₹ in lakh / crore for the big numbers (amounts always carry ₹, so hidden-amount logins mask them)
+const big = x => { const a = Math.abs(x), s = x < 0 ? '−' : '';
+  return a >= 1e7 ? s + '₹' + (a / 1e7).toFixed(2) + ' Cr' : a >= 1e5 ? s + '₹' + (a / 1e5).toFixed(2) + ' L' : s + inr(a); };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ms = day => Date.parse(day + 'T00:00:00Z');
+const dstr = (t, opt) => new Date(t).toLocaleDateString('en-IN', Object.assign({timeZone: 'UTC'}, opt));
+
+// line icons in place of words (the title says what each means), as on Paper > Overview
+const ICONS = {
+  live: '<path d="M5 12a7 7 0 0 1 2-5M19 12a7 7 0 0 0-2-5M8.5 12a3.5 3.5 0 0 1 1-2.5M15.5 12a3.5 3.5 0 0 0-1-2.5"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><path d="M12 14v6"/>',
+  closed: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>',
+  err: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',
+  warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+  stack: '<path d="M12 4l8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4M4 16l8 4 8-4"/>',
+  avg: '<path d="M4 18L10 11l4 4 6-8"/><path d="M4 12h16" stroke-dasharray="2 3"/>',
+  book: '<path d="M5 13l4 4L19 7"/>',
+  cal: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  swap: '<path d="M7 7h12l-3-3M17 17H5l3 3"/>',
+  split: '<path d="M12 20v-7M12 13L6 6M12 13l6-7M4 6h4M16 6h4"/>',
+  up: '<path d="M12 19V7M6 12l6-6 6 6"/>',
+  chart: '<path d="M4 19h16"/><path d="M6 15l4-5 3 3 5-7"/>',
+  prev: '<path d="M15 6l-6 6 6 6"/>', next: '<path d="M9 6l6 6-6 6"/>',
+  chev: '<path d="M9 6l6 6-6 6"/>'};
+const icon = (k, title) => `<svg class="ic ${k}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${esc(title)}"><title>${esc(title)}</title>${ICONS[k]}</svg>`;
+for (const [id, k, tl] of [['liveBtn', 'chart', 'Live chart'], ['tIc', 'swap', 'Trades'], ['aIc', 'split', 'Corporate actions'],
+                           ['iIc', 'info', 'About'], ['uIc', 'up', 'Import'], ['pgPrev', 'prev', 'Newer'], ['pgNext', 'next', 'Older']]) $(id).innerHTML = icon(k, tl);
+document.querySelectorAll('details.sec .chev').forEach(c => c.innerHTML = icon('chev', 'Show or hide'));
+
+let data = null, range = 0, view = 'value', chart = null, timer = null, wake = null;
+const param = new URLSearchParams(location.search).get('symbol');
+let symbol = param || '';
+try { if (!symbol) symbol = localStorage.getItem('stock') || ''; view = localStorage.getItem('stock.view') || 'value'; } catch (e) {}
+
+function render(d) {
+  data = d;
+  symbol = d.symbol;
+  const sel = $('sym'), opt = c => `<option value="${esc(c.symbol)}">${esc(c.symbol)}</option>`;
+  const held = d.choices.filter(c => c.held), sold = d.choices.filter(c => !c.held);
+  const html = (held.length ? `<optgroup label="Holding now">${held.map(opt).join('')}</optgroup>` : '') +
+    (sold.length ? `<optgroup label="Sold or renamed">${sold.map(opt).join('')}</optgroup>` : '');
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+  sel.value = d.symbol;
+  document.title = d.symbol ? d.symbol + ' · history' : 'Stock history';
+  $('liveBtn').href = '/chart?s=' + encodeURIComponent('NSE:' + (d.symbol || ''));
+  const [k, title] = d.sync_paused ? ['pause', 'Sync paused by you'] : !d.logged_in ? ['key', 'Not logged in to Zerodha'] : d.sync_active ? ['live', 'Syncing with Zerodha'] : ['closed', 'Market closed'];
+  $('stIc').innerHTML = icon(k, title);
+  $('emptyBox').classList.toggle('hide', d.series.length > 0);
+  $('emptyBox').innerHTML = icon('info', 'No trades') + 'No trades stored for this stock yet: import your tradebook below.';
+  const r = d.recon, bad = !r.ok;
+  $('reconBox').classList.toggle('hide', !bad);
+  if (bad) $('reconBox').innerHTML = `${icon('warn', 'History incomplete')}<b>History doesn't add up</b>: trades give ${+r.trade_qty.toFixed(2)} units` +
+    (r.holding_qty !== null ? `, Zerodha shows ${r.holding_qty} units` : '') + `. The figures at the top are Zerodha's; the graphs are unreliable.` +
+    `<details><summary>Why</summary>A corporate action or an off-market transfer is probably missing, so booked profit is not shown.</details>`;
+  const acts = d.actions || [];
+  $('actBox').classList.toggle('hide', !acts.length);
+  $('aCnt').textContent = acts.length || '';
+  $('acts').innerHTML = acts.map(a => `<li><b>${esc(dstr(ms(a.day), {day: 'numeric', month: 'short', year: 'numeric'}))}</b> ${esc(a.text)}<small>${esc(a.basis)}</small></li>`).join('');
+  const gap = r.cost_gap;
+  $('costNote').textContent = gap === null || gap === undefined ? '' : Math.abs(gap) < 1
+    ? 'Check: the cost worked out from your trades equals Zerodha’s figure for this holding.'
+    : `Check: the cost worked out from your trades differs from Zerodha’s figure by ${inr(Math.abs(gap))}, so the graphs are slightly off.`;
+  const s = d.summary || {};
+  for (const id of ['invested', 'value', 'pnl']) $(id).textContent = '–';
+  for (const id of ['since', 'ltp', 'pnlPct']) $(id).textContent = '';
+  $('chips').innerHTML = '';
+  if (s.qty !== undefined) {
+    $('value').textContent = big(s.value);
+    $('ltp').textContent = s.qty ? (s.last_price ? '@ ' + inr(s.last_price, 2) : '') : 'not held now';
+    $('pnl').innerHTML = `<span class="${cls(s.pnl)}">${big(Math.abs(s.pnl))}</span>`;
+    $('pnlPct').innerHTML = `<span class="${cls(s.pnl)}">${arrow(s.pnl)} ${apct(s.pnl_pct)}</span>`;
+    $('invested').textContent = big(s.invested);
+    $('since').textContent = s.first_day ? 'since ' + dstr(ms(s.first_day), {month: 'short', year: 'numeric'}) : '';
+    $('chips').innerHTML = (s.qty ? `<span class="chip" title="Units held">${icon('stack', 'Units held')}<b id="qty">${Number(s.qty).toLocaleString('en-IN')}</b> units</span>` +
+        `<span class="chip" title="Average cost of a unit">${icon('avg', 'Average cost')}<b>${inr(s.avg_cost, 2)}</b></span>` : '') +
+      (s.realized != null && Math.abs(s.realized) >= 1 ? `<span class="chip ${cls(s.realized)}" title="Profit booked on units sold">${icon('book', 'Booked')}<b>${mag$(s.realized)}</b></span>` : '') +
+      (d.trade_count ? `<span class="chip" title="Trades stored, first to last">${icon('cal', 'Trades stored')}${esc(dstr(ms(d.first_trade), {month: 'short', year: '2-digit'}))} – ${esc(dstr(ms(d.last_trade), {month: 'short', year: '2-digit'}))}</span>` : '');
+  }
+  $('priceNote').textContent = d.price_source + (d.price_note ? ' ' + d.price_note : '');
+  if (d.symbol !== shownSymbol) { shownSymbol = d.symbol; page = 0; side = ""; }
+  renderTrades();
+  draw();
+}
+
+const PER_PAGE = 10;
+let page = 0, shownSymbol = null, side = '';
+$('tradeTotals').onclick = e => { const b = e.target.closest('[data-side]'); if (!b) return;
+  side = side === b.dataset.side ? '' : b.dataset.side; page = 0; renderTrades(); };
+function renderTrades() {
+  const every = (data && data.recent) || [];
+  const all = side ? every.filter(t => t.side === side) : every;   // a tap on the Buys / Sells chip shows only those
+  const sum = side => all.filter(t => t.side === side).reduce((a, t) => ({n: a.n + 1, q: a.q + t.qty, v: a.v + t.qty * t.price}), {n: 0, q: 0, v: 0});
+  const box = (sd, s) => `<button type="button" class="chip fbtn ${sd === 'buy' ? 'up' : 'down'}${side === sd ? ' on' : ''}" data-side="${sd}" aria-pressed="${side === sd}"
+    title="${side === sd ? 'Show all trades' : 'Show only ' + (sd === 'buy' ? 'buys' : 'sells')}: ${s.n} trades, ${s.q} units">${sd === 'buy' ? '▲' : '▼'} <b>${inr(s.v)}</b> · ${s.n}</button>`;
+  $('tCnt').textContent = all.length || '';
+  const sumAll = sd => every.filter(t => t.side === sd).reduce((a, t) => ({n: a.n + 1, q: a.q + t.qty, v: a.v + t.qty * t.price}), {n: 0, q: 0, v: 0});
+  $('tradeTotals').innerHTML = every.length ? box('buy', sumAll('buy')) + box('sell', sumAll('sell')) : '';
+  const pages = Math.max(1, Math.ceil(all.length / PER_PAGE));
+  page = Math.min(Math.max(page, 0), pages - 1);
+  $('trades').innerHTML = all.slice(page * PER_PAGE, (page + 1) * PER_PAGE).map(t => { const b = t.side === 'buy';
+    return `<div class="tr"><span class="sd ${b ? 'buy' : 'sell'}" title="${b ? 'Buy' : 'Sell'}">${b ? 'B' : 'S'}</span>
+      <span><b>${t.qty} units</b> @ ${inr(t.price, 2)}<small>${esc(dstr(ms(t.day), {day: 'numeric', month: 'short', year: 'numeric'}))}</small></span>
+      <span class="${b ? '' : 'down'}">${inr(t.qty * t.price)}</span></div>`; }).join('') ||
+    '<div class="empty">No trades stored</div>';
+  $('pager').classList.toggle('hide', pages < 2);
+  $('pgInfo').textContent = `${page + 1} / ${pages}`;
+  $('pgPrev').disabled = page === 0;
+  $('pgNext').disabled = page >= pages - 1;
+}
+
+function draw() {
+  if (!window.Chart || !data) return;
+  document.querySelectorAll('#views button').forEach(b => b.className = b.dataset.v === view ? 'on' : '');
+  const css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
+  const up = v('--up'), down = v('--down'), muted = v('--muted'), line = v('--line'), s1 = v('--s1'), s2 = v('--s2'), card = v('--card');
+  const all = data.series, end = all.length ? ms(all[all.length - 1].day) : 0;
+  const from = range ? end - range * 864e5 : 0;
+  const rows = all.filter(p => ms(p.day) >= from);
+  const span = rows.length ? ms(rows[rows.length - 1].day) - ms(rows[0].day) : 0;
+  const tick = t => dstr(t, span > 200 * 864e5 ? {month: 'short', year: '2-digit'} : {day: 'numeric', month: 'short'});
+  const even = axis => { const n = 4, a = axis.min, b = axis.max; if (b > a) axis.ticks = Array.from({length: n + 1}, (_, i) => ({value: a + (b - a) * i / n})); };
+  const xTime = {type: 'linear', afterBuildTicks: even, ticks: {color: muted, callback: tick, maxRotation: 0}, grid: {display: false},
+    min: rows.length ? ms(rows[0].day) : undefined, max: rows.length ? ms(rows[rows.length - 1].day) : undefined};
+  const money = {ticks: {color: muted, maxTicksLimit: 6, callback: short}, grid: {color: line}, border: {display: false}};
+  const base = {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: 'index', intersect: false}, layout: {padding: {right: 8, top: 6, left: 4}}};
+  const tip = extra => ({callbacks: Object.assign({title: c => c.length ? dstr(c[0].parsed.x, {day: 'numeric', month: 'short', year: 'numeric'}) : ''}, extra)});
+  const pts = k => rows.map(p => ({x: ms(p.day), y: p[k]}));
+  // High and low are thin neutral lines edging a soft band; the close is the bold line.
+  // The highest point of the period gets a green dot and the lowest a red dot.
+  const held = rows.filter(p => p.qty > 0), scope = held.length ? held : rows;
+  const peak = (k, best) => scope.reduce((a, p) => a === null || best(p[k], a[k]) ? p : a, null);
+  const dot = (at, colour) => { const on = rows.map(p => p === at);
+    return {pointRadius: on.map(x => x ? 5 : 0), pointHoverRadius: on.map(x => x ? 6 : 3), pointBackgroundColor: colour, pointBorderColor: card, pointBorderWidth: 2}; };
+  const band = (hi, lo, close, top, bottom) => [
+    Object.assign({label: 'High', data: pts(hi), borderColor: muted, borderWidth: 1, tension: .15, fill: '+2', backgroundColor: s2 + '26'}, dot(top, up)),
+    {label: 'Close', data: pts(close), borderColor: s2, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: .15},
+    Object.assign({label: 'Low', data: pts(lo), borderColor: muted, borderWidth: 1, borderDash: [2, 3], tension: .15}, dot(bottom, down))];
+  const when = p => dstr(ms(p.day), {day: 'numeric', month: 'short', year: '2-digit'});
+  const ext = (top, bottom, hi, lo, fmt) => top && bottom ? `<span title="Highest in the period">▲ <b class="${fmt === inr ? '' : cls(top[hi])}">${fmt(top[hi])}</b> ${esc(when(top))}</span>` +
+      `<span title="Lowest in the period">▼ <b class="${fmt === inr ? '' : cls(bottom[lo])}">${fmt(bottom[lo])}</b> ${esc(when(bottom))}</span>` : '';
+  const LG = {band: '<span><i class="sw thin"></i>High</span><span><i class="sw" style="background:var(--s2)"></i>Close</span><span><i class="sw dot"></i>Low</span>'};
+  if (chart) { chart.destroy(); chart = null; }
+  let cfg;
+  if (view === 'value') {
+    const top = peak('value_high', (x, y) => x > y), bottom = peak('value_low', (x, y) => x < y);
+    $('lgd').innerHTML = '<span><i class="sw dash"></i>Invested</span>' + LG.band; $('ext').innerHTML = ext(top, bottom, 'value_high', 'value_low', inr);
+    cfg = {type: 'line', data: {datasets: [
+      {label: 'Invested', data: pts('invested'), borderColor: s1, borderDash: [5, 3], borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, stepped: true},
+      ...band('value_high', 'value_low', 'value', top, bottom)]},
+      options: Object.assign({}, base, {plugins: {legend: {display: false}, tooltip: tip({label: c => `${c.dataset.label}: ${inr(c.parsed.y)}`})}, scales: {x: xTime, y: money}})};
+  } else if (view === 'pnl') {
+    const top = peak('pnl_high', (x, y) => x > y), bottom = peak('pnl_low', (x, y) => x < y);
+    $('lgd').innerHTML = LG.band; $('ext').innerHTML = ext(top, bottom, 'pnl_high', 'pnl_low', mag$);
+    cfg = {type: 'line', data: {datasets: band('pnl_high', 'pnl_low', 'pnl', top, bottom)},
+      options: Object.assign({}, base, {plugins: {legend: {display: false}, tooltip: tip({label: c => `${c.dataset.label}: ${signed(c.parsed.y)}`})}, scales: {x: xTime, y: money}})};
+  } else {
+    const months = data.monthly.filter(m => ms(m.month + '-28') >= from), net = months.map(m => m.bought - m.sold);
+    $('lgd').innerHTML = `<span><i class="sw" style="background:var(--up);height:8px;width:8px"></i>Bought more</span><span><i class="sw" style="background:var(--down);height:8px;width:8px"></i>Sold more</span>`;
+    const tot = net.reduce((a, x) => a + x, 0);
+    $('ext').innerHTML = months.length ? `<span>Net in the period <b class="${cls(tot)}">${mag$(tot)}</b></span>` : '';
+    cfg = {type: 'bar', data: {labels: months.map(m => dstr(ms(m.month + '-01'), {month: 'short', year: '2-digit'})),
+      datasets: [{label: 'Net added', data: net, backgroundColor: net.map(x => x >= 0 ? up : down), borderRadius: 3, maxBarThickness: 26}]},
+      options: Object.assign({}, base, {plugins: {legend: {display: false}, tooltip: {callbacks: {label: c => signed(c.parsed.y)}}},
+        scales: {x: {ticks: {color: muted, maxTicksLimit: 8}, grid: {display: false}}, y: money}})};
+  }
+  chart = new Chart($('cMain'), cfg);
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/stock?symbol=' + encodeURIComponent(symbol));
+    if (r.status === 401) { location.href = '/signin?next=/stock'; return; }
+    const d = await r.json();
+    render(d);
+    clearInterval(timer); clearTimeout(wake); timer = null;
+    if (d.sync_active) timer = setInterval(load, 60000);   // figures only move during sync hours
+    else if (!d.sync_paused) wake = setTimeout(load, ((d.next_sync_seconds || 3600) + 5) * 1000);
+  } catch (e) { $('stIc').innerHTML = icon('err', 'Cannot reach the dashboard app'); }
+}
+document.querySelectorAll('#ranges button').forEach(b => b.onclick = () => {
+  range = +b.dataset.r; document.querySelectorAll('#ranges button').forEach(x => x.className = x === b ? 'on' : ''); draw(); });
+document.querySelectorAll('#views button').forEach(b => b.onclick = () => {
+  view = b.dataset.v; try { localStorage.setItem('stock.view', view); } catch (e) {} draw(); });
+$('pgPrev').onclick = () => { page--; renderTrades(); };
+$('pgNext').onclick = () => { page++; renderTrades(); };
+$('sym').onchange = e => {
+  symbol = e.target.value;
+  try { localStorage.setItem('stock', symbol); } catch (err) {}
+  history.replaceState(null, '', '/stock?symbol=' + encodeURIComponent(symbol));
+  load();
+};
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !timer) load(); });
+load();
+</script>
+</body>
+</html>

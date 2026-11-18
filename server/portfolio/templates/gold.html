@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gold ETF</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#646b78;--line:#e5e7eb;--up:#087a4c;--down:#c8323a;--accent:#2f6fed;--gold:#c8961e;--s1:#2f6fed;--s2:#b5820c}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#e8eaee;--muted:#8b93a1;--line:#272b35;--up:#34c98a;--down:#f0626a;--accent:#6c9bff;--gold:#e0b34a;--s1:#5a8af0;--s2:#b88a1e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+h1{font-size:20px;margin:0}
+h2{font-size:15px;margin:0 0 4px;font-weight:600}
+.status{font-size:13px;color:var(--muted)}
+.status a{color:var(--muted)}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.card .big{font-size:22px;font-weight:650;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .sub{font-size:13px;margin-top:2px;color:var(--muted);font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.down{color:var(--down)}
+.block{margin-top:12px}
+.tabs{display:flex;gap:6px;margin:14px 0 0;align-items:center;flex-wrap:wrap}
+.tabs span{font-size:13px;color:var(--muted);margin-right:4px}
+.tabs button{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:6px;padding:4px 12px;font-size:13px;cursor:pointer}
+.tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.chartbox{height:250px;position:relative;margin-top:8px}
+.chartbox.short{height:200px}
+.legend{display:flex;gap:4px 14px;font-size:13px;color:var(--muted);flex-wrap:wrap}
+.sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.sw.dash{background:repeating-linear-gradient(90deg,var(--s1) 0 5px,transparent 5px 8px)}
+.sw.thin{height:2px;background:var(--muted)}
+.sw.dot{height:2px;background:repeating-linear-gradient(90deg,var(--muted) 0 2px,transparent 2px 5px)}
+.note{color:var(--muted);font-size:12px;margin-top:8px}
+.banner{background:var(--card);border:1px solid var(--down);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+.banner.info{border-color:var(--line);color:var(--muted)}
+.hide{display:none}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;margin-top:6px}
+th,td{padding:8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;color:var(--muted);font-weight:600}
+details summary{cursor:pointer;font-weight:600}
+details form{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
+input[type=file]{max-width:100%;font-size:14px;color:var(--text)}
+@media (max-width:760px){.cards{grid-template-columns:repeat(2,1fr)}.card .big{font-size:19px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Gold ETF</h1>
+    <div class="status"><span id="status">Loading…</span> · <a href="/">Portfolio</a> · <a href="/signout">Sign out</a></div>
+  </header>
+
+  {% if message %}<div class="banner info">{{ message }}</div>{% endif %}
+  <div class="banner hide" id="reconBox"></div>
+  <div class="banner info hide" id="emptyBox">No gold trades are stored yet. Import your Zerodha Console tradebook below to build the history.</div>
+
+  <div class="cards">
+    <div class="card"><div class="label">Money invested</div><div class="big" id="invested">–</div><div class="sub" id="since"></div></div>
+    <div class="card"><div class="label">Current value</div><div class="big" id="value">–</div><div class="sub" id="ltp"></div></div>
+    <div class="card"><div class="label">Profit / loss</div><div class="big" id="pnl">–</div><div class="sub" id="pnlPct"></div></div>
+    <div class="card"><div class="label">Units held</div><div class="big" id="qty">–</div><div class="sub" id="avg"></div></div>
+  </div>
+
+  <div class="tabs" id="ranges"><span>Period</span>
+    <button data-r="90">3 months</button><button data-r="365">1 year</button><button data-r="0" class="on">All</button>
+  </div>
+
+  <div class="card block">
+    <h2>Money invested and current value</h2>
+    <div class="legend"><span><i class="sw dash"></i>Invested</span><span><i class="sw thin"></i>At day high</span><span><i class="sw" style="background:var(--s2)"></i>At close</span><span><i class="sw dot"></i>At day low</span></div>
+    <div class="chartbox"><canvas id="cValue"></canvas></div>
+  </div>
+
+  <div class="card block">
+    <h2>Profit / loss over time</h2>
+    <div class="legend"><span><i class="sw thin"></i>At day high</span><span><i class="sw" style="background:var(--s2)"></i>At close</span><span><i class="sw dot"></i>At day low</span></div>
+    <div class="chartbox short"><canvas id="cPnl"></canvas></div>
+    <div class="note" id="priceNote"></div>
+  </div>
+
+  <div class="card block">
+    <h2>Money added each month</h2>
+    <div class="chartbox short"><canvas id="cMonth"></canvas></div>
+    <div class="note">Purchases minus sales in the month.</div>
+  </div>
+
+  <div class="card block">
+    <h2>Recent gold trades</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Date</th><th>Symbol</th><th>Type</th><th>Units</th><th>Price</th><th>Amount</th></tr></thead>
+      <tbody id="trades"></tbody>
+    </table></div>
+    <div class="note" id="tradeNote"></div>
+  </div>
+
+  <div class="card block">
+    <details>
+      <summary>Import tradebook</summary>
+      <div class="note">Upload the Equity tradebook files from Zerodha Console (Reports → Tradebook), Excel or CSV. Trades already stored are skipped, so it is safe to upload the same file twice. New trades are also recorded automatically each trading day.</div>
+      <form method="post" action="/gold/import" enctype="multipart/form-data">
+        <input type="file" name="files" multiple accept=".xlsx,.csv" required>
+        <button class="btn" type="submit">Import</button>
+      </form>
+    </details>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const inr = (x, d = 0) => '₹' + Number(x).toLocaleString('en-IN', {minimumFractionDigits: d, maximumFractionDigits: d});
+const signed = (x, d = 0) => (x >= 0 ? '+' : '−') + inr(Math.abs(x), d);
+const pct = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(2) + '%';
+const compact = new Intl.NumberFormat('en-IN', {notation: 'compact', maximumFractionDigits: 1});
+const short = x => (x < 0 ? '−' : '') + '₹' + compact.format(Math.abs(x)).replace('T', 'K');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ms = day => Date.parse(day + 'T00:00:00Z');
+const dstr = (t, opt) => new Date(t).toLocaleDateString('en-IN', Object.assign({timeZone: 'UTC'}, opt));
+let data = null, range = 0, charts = {}, timer = null, wake = null;
+
+function setNum(id, text, v) { const e = $(id); e.textContent = text; e.className = 'big' + (v === undefined ? '' : v >= 0 ? ' up' : ' down'); }
+
+function render(d) {
+  data = d;
+  const s = d.summary;
+  $('status').textContent = !d.logged_in ? 'Not logged in to Zerodha' : d.sync_active ? 'Syncing with Zerodha' : 'Market closed · sync paused';
+  $('emptyBox').classList.toggle('hide', d.series.length > 0);
+  const r = d.recon;
+  const bad = r.holding_qty !== null && !r.ok;
+  $('reconBox').classList.toggle('hide', !bad);
+  if (bad) $('reconBox').textContent = `Stored trades add up to ${r.trade_qty} units but Zerodha shows ${r.holding_qty}. Some trades are missing or duplicated, so the figures below may be off. Import the full tradebook to fix this.`;
+  if (s.qty !== undefined) {
+    setNum('invested', inr(s.invested)); $('since').textContent = s.first_day ? 'since ' + dstr(ms(s.first_day), {month: 'short', year: 'numeric'}) : '';
+    setNum('value', inr(s.value)); $('ltp').textContent = s.last_price ? 'at ' + inr(s.last_price, 2) + ' a unit' : '';
+    setNum('pnl', signed(s.pnl), s.pnl); $('pnlPct').textContent = pct(s.pnl_pct) + ' on money invested';
+    setNum('qty', Number(s.qty).toLocaleString('en-IN')); $('avg').textContent = 'average cost ' + inr(s.avg_cost, 2) + (Math.abs(s.realized) >= 1 ? ' · booked ' + signed(s.realized) : '');
+  }
+  $('priceNote').textContent = d.price_source + (d.price_note ? ' ' + d.price_note : '');
+  $('trades').innerHTML = d.recent.map(t => `<tr><td>${esc(dstr(ms(t.day), {day: 'numeric', month: 'short', year: '2-digit'}))}</td><td>${esc(t.symbol)}</td>
+    <td>${t.side === 'buy' ? 'Buy' : 'Sell'}</td><td>${t.qty}</td><td>${inr(t.price, 2)}</td><td>${inr(t.qty * t.price)}</td></tr>`).join('') ||
+    '<tr><td colspan="6" style="text-align:center;color:var(--muted)">No trades stored</td></tr>';
+  $('tradeNote').textContent = d.trade_count ? `${d.trade_count} gold trades stored, ${d.first_trade} to ${d.last_trade}.` : '';
+  draw();
+}
+
+function draw() {
+  if (!window.Chart || !data) return;
+  const css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
+  const up = v('--up'), down = v('--down'), muted = v('--muted'), line = v('--line'), s1 = v('--s1'), s2 = v('--s2'), text = v('--text');
+  const all = data.series, end = all.length ? ms(all[all.length - 1].day) : 0;
+  const from = range ? end - range * 864e5 : 0;
+  const rows = all.filter(p => ms(p.day) >= from);
+  const span = rows.length ? ms(rows[rows.length - 1].day) - ms(rows[0].day) : 0;
+  const tick = t => dstr(t, span > 200 * 864e5 ? {month: 'short', year: '2-digit'} : {day: 'numeric', month: 'short'});
+  const even = axis => { const n = 4, a = axis.min, b = axis.max; if (b > a) axis.ticks = Array.from({length: n + 1}, (_, i) => ({value: a + (b - a) * i / n})); };
+  const xTime = {type: 'linear', afterBuildTicks: even, ticks: {color: muted, callback: tick, maxRotation: 0}, grid: {display: false},
+    min: rows.length ? ms(rows[0].day) : undefined, max: rows.length ? ms(rows[rows.length - 1].day) : undefined};
+  const money = {ticks: {color: muted, maxTicksLimit: 6, callback: short}, grid: {color: line}, border: {display: false}};
+  const base = {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: 'index', intersect: false}};
+  const tip = extra => Object.assign({callbacks: Object.assign({title: c => c.length ? dstr(c[0].parsed.x, {day: 'numeric', month: 'short', year: 'numeric'}) : ''}, extra)});
+  const pts = k => rows.map(p => ({x: ms(p.day), y: p[k]}));
+
+  // High and low are thin neutral lines edging a soft band; the close is the bold line.
+  const band = (hi, lo, close) => [
+    {label: 'At day high', data: pts(hi), borderColor: muted, borderWidth: 1, pointRadius: 0, pointHoverRadius: 3, tension: .15, fill: '+2', backgroundColor: s2 + '26'},
+    {label: 'At close', data: pts(close), borderColor: s2, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: .15},
+    {label: 'At day low', data: pts(lo), borderColor: muted, borderWidth: 1, borderDash: [2, 3], pointRadius: 0, pointHoverRadius: 3, tension: .15}];
+
+  make('cValue', {type: 'line',
+    data: {datasets: [
+      {label: 'Invested', data: pts('invested'), borderColor: s1, borderDash: [5, 3], borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, stepped: true},
+      ...band('value_high', 'value_low', 'value')]},
+    options: Object.assign({}, base, {plugins: {legend: {display: false}, tooltip: tip({
+      label: c => `${c.dataset.label}: ${inr(c.parsed.y)}`})},
+      scales: {x: xTime, y: money}})});
+
+  make('cPnl', {type: 'line',
+    data: {datasets: band('pnl_high', 'pnl_low', 'pnl')},
+    options: Object.assign({}, base, {plugins: {legend: {display: false}, tooltip: tip({label: c => `${c.dataset.label}: ${signed(c.parsed.y)}`})},
+      scales: {x: xTime, y: money}})});
+
+  const months = data.monthly.filter(m => ms(m.month + '-28') >= from);
+  make('cMonth', {type: 'bar',
+    data: {labels: months.map(m => dstr(ms(m.month + '-01'), {month: 'short', year: '2-digit'})),
+      datasets: [{label: 'Net added', data: months.map(m => m.bought - m.sold), backgroundColor: s1, borderRadius: 3, maxBarThickness: 26}]},
+    options: Object.assign({}, base, {plugins: {legend: {display: false}, tooltip: {callbacks: {label: c => signed(c.parsed.y)}}},
+      scales: {x: {ticks: {color: muted, maxTicksLimit: 8}, grid: {display: false}}, y: money}})});
+}
+
+function make(id, cfg) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart($(id), cfg);
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/gold');
+    if (r.status === 401) { location.href = '/signin?next=/gold'; return; }
+    const d = await r.json();
+    render(d);
+    clearInterval(timer); clearTimeout(wake); timer = null;
+    if (d.sync_active) timer = setInterval(load, 60000);   // figures only move during sync hours
+    else wake = setTimeout(load, ((d.next_sync_seconds || 3600) + 5) * 1000);
+  } catch (e) { $('status').textContent = 'Cannot reach the dashboard app'; }
+}
+document.querySelectorAll('#ranges button').forEach(b => b.onclick = () => {
+  range = +b.dataset.r; document.querySelectorAll('#ranges button').forEach(x => x.className = x === b ? 'on' : ''); draw(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !timer) load(); });
+load();
+</script>
+</body>
+</html>

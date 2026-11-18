@@ -1,0 +1,41 @@
+# secrets and logins
+secrets.yaml
+access_token*.json
+# local environment
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+# data and results (large, machine-specific; back them up separately)
+data/spot/*
+!data/spot/.keep
+!data/spot/SAMPLE_NIFTY_5minute.csv
+data/options/*
+!data/options/.keep
+data/truedata/
+data/chain_*.csv
+runtime/*
+!runtime/.keep
+runs/
+deploy/paste-engine-update.txt
+deploy/last-server-update.log
+deploy/.hostkey-reset-2gb
+data/truedata/
+deploy/*.log
+deploy/.hostkey-reset-*
+.pytest_cache/
+# portfolio dashboard: keys, logins, database and local backups stay on the machines
+server/portfolio/config.json
+server/portfolio/token.json
+server/portfolio/.secret_key
+server/portfolio/*.db
+server/portfolio/data/
+server/portfolio/backup-*/
+server/portfolio/**/.env
+server/portfolio/**/tws_settings/
+server/portfolio/**/paste-*.txt
+*.pem
+.env
+deploy/COMMIT
+deploy/REPO

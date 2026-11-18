@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#646b78;--line:#e5e7eb;--up:#087a4c;--down:#c8323a;--accent:#2f6fed;--gold:#c8961e;--warn:#a06a1a}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#e8eaee;--muted:#8b93a1;--line:#272b35;--up:#34c98a;--down:#f0626a;--accent:#6c9bff;--gold:#e0b34a;--warn:#e0a84a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+h2{font-size:13px;margin:0;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:6px}
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;min-width:0}
+.status b{color:var(--text);font-weight:600}
+.acts{display:flex;gap:6px;flex:none}
+.ic{width:15px;height:15px;display:inline-block;vertical-align:-3px;flex:none}
+.ic.live{color:var(--up)}.ic.closed{color:var(--muted)}.ic.pause,.ic.key,.ic.poll,.ic.warn{color:var(--warn)}.ic.err{color:var(--down)}
+.ibtn{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:36px;min-width:36px;padding:0 9px;border-radius:9px;
+  border:1px solid var(--line);color:var(--accent);background:var(--card);text-decoration:none;font:600 13px system-ui,-apple-system,sans-serif;cursor:pointer}
+.ibtn .ic{width:17px;height:17px;vertical-align:0;color:inherit}
+.ibtn.on{background:var(--warn);border-color:var(--warn);color:#fff}
+.ibtn.sm{height:30px;min-width:30px;padding:0 6px;color:var(--muted)}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer;text-decoration:none;display:inline-block}
+.btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px}
+.up{color:var(--up)}.down{color:var(--down)}
+.hide{display:none!important}
+.tag{font-size:12px;padding:1px 6px;border-radius:4px;border:1px solid var(--gold);color:var(--gold)}
+/* headline numbers */
+.nums{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:10px;font-variant-numeric:tabular-nums}
+.nums .lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.nums .nv{font-size:20px;font-weight:700;line-height:1.25;white-space:nowrap}
+.nums>div:first-child .nv{font-size:23px}
+.nums .ns{font-size:12px}
+.vbar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--line);margin-top:12px}
+.vbar i{height:100%;transition:width .4s}
+#invBar{background:var(--accent)}#pnlBar.up{background:var(--up)}
+#pnlBar.down{background:repeating-linear-gradient(45deg,var(--down) 0 4px,color-mix(in srgb,var(--down) 45%,transparent) 4px 8px)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip b{color:var(--text);font-weight:600}.chip .ic{width:13px;height:13px;vertical-align:-2px}
+.dnote{font-size:12px;color:var(--muted);margin-top:6px;display:flex;align-items:center;gap:5px}
+.chip.ud{gap:6px}.chip.ud small{font-size:12px;color:var(--muted)}
+.chip.up{color:var(--up);border-color:color-mix(in srgb,var(--up) 40%,var(--line))}.chip.down{color:var(--down);border-color:color-mix(in srgb,var(--down) 40%,var(--line))}
+/* today's range: low · now · high on one track */
+.rng{display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:center;font-variant-numeric:tabular-nums}
+.rng .e b{display:block;font-size:15px}.rng .e small{color:var(--muted);font-size:12px}
+.rng .e:last-child{text-align:right}
+.track{position:relative;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--down),var(--line) 50%,var(--up))}
+.track i{position:absolute;top:-5px;width:4px;height:16px;border-radius:2px;background:var(--text);transform:translateX(-2px)}
+.track span{position:absolute;top:-24px;transform:translateX(-50%);font-size:13px;font-weight:700;white-space:nowrap}
+.rng .mid{padding-top:20px}
+/* chart */
+.chead{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;margin-bottom:8px}
+.chead .seg{flex:none}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;gap:2px}
+.seg button{border:0;background:transparent;color:var(--muted);border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.seg button.on{background:var(--accent);color:#fff}
+.seg .ic{width:14px;height:14px}
+.chead select{margin-left:auto;flex:0 1 150px;min-width:0;width:100%;height:32px;padding:4px 6px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--text);font-size:13px}
+.chartbox{height:230px;position:relative}
+/* holdings: one row per stock that fits a phone */
+.hhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.hhead .seg{margin-left:auto}
+.cnt{font-size:12px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0}
+.hl{font-variant-numeric:tabular-nums}
+.hr{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,auto) minmax(104px,auto) minmax(84px,auto) 110px;gap:0 12px;align-items:center;padding:8px 2px;border-top:1px solid var(--line)}
+.hr.hd{border-top:0;padding:0 2px 4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.hr.hd span{cursor:pointer;user-select:none;padding:4px 0}.hr.hd span.on{color:var(--accent)}
+.hr>span{text-align:right;white-space:nowrap}.hr>span:first-child{text-align:left;min-width:0}
+.hr .nm{display:flex;align-items:center;gap:5px;font-weight:600;font-size:14px}
+.hr .nm a{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;display:inline-block;padding:4px 8px 4px 0;margin:-4px 0}
+.hr .nm .ic{color:var(--gold);width:13px;height:13px}
+.hr small{display:block;font-size:12px;color:var(--muted)}.hr small.up{color:var(--up)}.hr small.down{color:var(--down)}
+.hr .vs{display:none}
+.hr .pv{font-weight:650}
+.wbar{display:block;height:3px;border-radius:2px;background:var(--line);margin:4px 0 0 auto;max-width:90px}
+.wbar i{display:block;height:100%;border-radius:2px;background:var(--accent);opacity:.7}
+@keyframes fu{from{background:color-mix(in srgb,var(--up) 28%,transparent)}to{background:transparent}}
+@keyframes fd{from{background:color-mix(in srgb,var(--down) 28%,transparent)}to{background:transparent}}
+.tu{animation:fu 1.2s ease-out}.td{animation:fd 1.2s ease-out}
+/* alerts, folded */
+details.sec>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary .chev{display:inline-flex;flex:none;margin-left:auto;color:var(--muted);transition:transform .2s}
+details.sec[open]>summary .chev{transform:rotate(90deg)}
+.last{font-size:12.5px;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;font-weight:400}
+.alerts{list-style:none;margin:8px 0 0;padding:0;max-height:260px;overflow:auto}
+.alerts li{padding:7px 0;border-top:1px solid var(--line);font-size:14px;display:flex;gap:10px;justify-content:space-between}
+.alerts small{color:var(--muted);white-space:nowrap;font-size:12px}
+.arow{display:flex;justify-content:flex-end;margin-top:8px}
+/* banners */
+.banner{background:var(--card);border:1px solid var(--down);border-radius:12px;padding:12px 14px;margin-bottom:10px;font-size:14px}
+.banner.info{border-color:var(--line)}
+.banner .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.banner .ic{width:16px;height:16px;margin-right:4px}
+.paste{margin-top:10px;font-size:13px;color:var(--muted)}
+.paste summary{cursor:pointer}
+.paste input{width:100%;padding:9px 10px;margin:8px 0;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font-size:16px}
+.empty{color:var(--muted);font-size:14px;padding:8px 0}
+@media (max-width:760px){
+  .hr{grid-template-columns:minmax(0,1fr) minmax(72px,auto) minmax(84px,auto);gap:0 10px}
+  .hr .w{display:none}.hr .vs{display:block}
+  .nums .nv{font-size:17px}.nums>div:first-child .nv{font-size:19px}
+  .chartbox{height:200px}
+}
+@media (max-width:420px){.chead .seg button{padding:6px 8px}}
+@media (max-width:380px){.seg button{padding:6px 9px}.nums{gap:6px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="status"><span id="stIc"></span><span id="status">Loading…</span>{% if demo %} <span class="tag">DEMO</span>{% endif %}</div>
+    <div class="acts">
+      <button class="ibtn" id="pauseBtn" type="button" title="Pause sync"></button>
+      <a class="ibtn" href="/export.csv" id="csvBtn" title="Download history (CSV)"></a>
+    </div>
+  </header>
+
+  <div class="banner hide" id="loginBox">
+    <span id="keyIc"></span><b>Zerodha login needed</b> to start the day's prices.
+    <div class="row"><a class="btn" href="/login">Log in with Zerodha</a></div>
+    <details class="paste"><summary>The page after login did not open?</summary>
+      <form method="post" action="/login/paste">
+        <input id="pasteVal" name="value" autocomplete="off" autocapitalize="off" placeholder="Paste its address: http://127.0.0.1…request_token=…" aria-label="Address of the page after login">
+        <button class="btn ghost" type="submit">Submit</button>
+      </form>
+    </details>
+  </div>
+  <div class="banner hide" id="pauseBox"></div>
+  <div class="banner hide" id="errBox"></div>
+  <div class="banner info hide" id="streamBox"></div>
+
+  <div class="card" id="valueCard" style="margin-top:0">
+    <div class="nums">
+      <div><div class="lbl">Value</div><div class="nv" id="value">–</div><div class="ns" id="valueSub"></div></div>
+      <div><div class="lbl" id="dayLbl">Today</div><div class="nv" id="day">–</div><div class="ns" id="dayPct"></div></div>
+      <div><div class="lbl">Total P&amp;L</div><div class="nv" id="pnl">–</div><div class="ns" id="pnlPct"></div></div>
+    </div>
+    <div class="vbar" id="valueBar"><i id="invBar" style="width:0"></i><i id="pnlBar" style="width:0"></i></div>
+    <div class="chips" id="chips"></div>
+    <div class="dnote hide" id="dayNote"></div>
+  </div>
+
+  <div class="card" id="rDay"><h2><span id="rIc"></span>Today's range</h2><div class="empty">Builds up from the market open.</div></div>
+
+  <div class="card">
+    <div class="chead">
+      <div class="seg" role="tablist">
+        <button id="tToday" class="on" title="Day P&amp;L since 9:15; dots mark the low and the high">Today</button><button id="tStocks" title="Each holding's day P&amp;L now, best to worst">Stocks</button><button id="tDaily" title="Day P&amp;L of each trading day, at the close">Days</button><button id="tTotal" title="Total P&amp;L across days: the day's high, close and low">Total</button>
+      </div>
+      <select id="histSym" class="hide" aria-label="Stock"><option value="">All</option></select>
+    </div>
+    <div class="chartbox" id="chartbox"><canvas id="chart"></canvas></div>
+  </div>
+
+  <details class="card sec" id="holdSec">
+    <summary><h2><span id="holdIc"></span>Holdings <span class="cnt" id="count"></span></h2><span class="last" id="holdLast"></span><span class="chev" id="chev2"></span></summary>
+    <div class="hhead" style="margin-top:8px"><div class="seg"><button id="vDay" class="on" title="Change today">Day</button><button id="vTot" title="Change since bought">Total</button></div></div>
+    <div class="hl" id="rows"></div>
+  </details>
+
+  <details class="card sec" id="alertSec">
+    <summary><h2><span id="bellIc"></span>Alerts <span class="cnt" id="alertCnt"></span></h2><span class="last" id="alertLast"></span><span class="chev" id="chev"></span></summary>
+    <ul class="alerts" id="alerts"></ul>
+    <div class="arow"><button class="ibtn sm" id="testBtn" type="button" title="Send a test alert"></button></div>
+  </details>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const inr = (x, d = 0) => '₹' + Number(x).toLocaleString('en-IN', {minimumFractionDigits: d, maximumFractionDigits: d});
+const signed = (x, d = 0) => (x >= 0 ? '+' : '−') + inr(Math.abs(x), d);
+const pct = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(2) + '%';
+const cls = x => x >= 0 ? 'up' : 'down';
+const arrow = x => x >= 0 ? '▲' : '▼';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// ₹ in lakh / crore for the big numbers (amounts always carry ₹, so hidden-amount logins mask them)
+const short = x => { const a = Math.abs(x), s = x < 0 ? '−' : '';
+  return a >= 1e7 ? s + '₹' + (a / 1e7).toFixed(2) + ' Cr' : a >= 1e5 ? s + '₹' + (a / 1e5).toFixed(2) + ' L' : s + inr(a); };
+const sshort = x => (x >= 0 ? '+' : '') + short(x);
+// coloured figures carry no + / − : green and red already say which way
+const mag = x => short(Math.abs(x)), mag$ = x => inr(Math.abs(x)), apct = x => Math.abs(x).toFixed(2) + '%';
+
+// line icons in place of words (the title says what each means), as on Paper > Overview
+const ICONS = {
+  live: '<path d="M5 12a7 7 0 0 1 2-5M19 12a7 7 0 0 0-2-5M8.5 12a3.5 3.5 0 0 1 1-2.5M15.5 12a3.5 3.5 0 0 0-1-2.5"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><path d="M12 14v6"/>',
+  poll: '<path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/>',
+  closed: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>',
+  play: '<path d="M7 5l12 7-12 7z"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>',
+  err: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',
+  gold: '<path d="M4 18h16l-3-8H7z"/><path d="M8 10l2-5h4l2 5"/>',
+  stack: '<path d="M12 4l8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4M4 16l8 4 8-4"/>',
+  wallet: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 15h2"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>',
+  send: '<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>',
+  dl: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  range: '<path d="M4 12h16M4 8v8M20 8v8"/><circle cx="14" cy="12" r="2" fill="currentColor"/>',
+  chev: '<path d="M9 6l6 6-6 6"/>'};
+const icon = (k, title) => `<svg class="ic ${k}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${esc(title)}"><title>${esc(title)}</title>${ICONS[k]}</svg>`;
+$('csvBtn').innerHTML = icon('dl', 'Download history (CSV)');
+$('keyIc').innerHTML = icon('key', 'Login needed');
+$('rIc').innerHTML = icon('range', "Today's range");
+$('bellIc').innerHTML = icon('bell', 'Alerts');
+$('chev').innerHTML = icon('chev', 'Show or hide');
+$('chev2').innerHTML = icon('chev', 'Show or hide');
+$('holdIc').innerHTML = icon('stack', 'Holdings');
+$('testBtn').innerHTML = icon('send', 'Send a test alert');
+
+let mode = 'today', view = 'day', sortKey = 'value', sortDir = -1, last = null, chart = null, chartKind = null, hist = null, histSym = '';
+// folded sections remember open / closed on this device; holdings and alerts start closed
+for (const [id, k] of [['alertSec', 'pf.alerts'], ['holdSec', 'pf.holdings']]) {
+  try { $(id).open = localStorage.getItem(k) === '1'; } catch (e) {}
+  $(id).ontoggle = () => { try { localStorage.setItem(k, $(id).open ? '1' : '0'); } catch (e) {} };
+}
+try { view = localStorage.getItem('pf.view') || 'day'; } catch (e) {}
+
+function hm(ts) { return window.TZ ? TZ.hm(ts) : String(ts || '').replace(/^.*?, /, '').replace(/^\d{4}-\d\d-\d\d /, '').slice(0, 5); }
+function ago(ts) {   // "10:42" today, "14 Oct" earlier
+  const m = /^(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d)/.exec(ts || '');
+  if (!m) return esc(ts || '');
+  const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  return m[1] === today ? hm(ts) : new Date(m[1] + 'T00:00:00').toLocaleDateString('en-IN', {day: 'numeric', month: 'short'});
+}
+
+let DAY = 'Today';
+function dayName(d) {
+  if (!d.day_of) return 'Today';
+  return new Date(d.day_of + 'T00:00').toLocaleDateString('en-IN', {weekday: 'short', day: 'numeric', month: 'short'}).replace(',', '');
+}
+function render(d) {
+  last = d;
+  DAY = dayName(d);
+  $('dayLbl').textContent = DAY;
+  $('dayNote').classList.toggle('hide', !d.day_of);
+  if (d.day_of) $('dayNote').innerHTML = icon('closed', 'Market closed') + `Market closed · ${esc(DAY)} shown until 9:15 IST`;
+  const due = d.login_due !== undefined ? d.login_due : !(d.logged_in || d.demo);   // only on trading days
+  $('loginBox').classList.toggle('hide', !due);
+  $('errBox').classList.toggle('hide', !d.error);
+  if (d.error) $('errBox').innerHTML = icon('err', 'Error') + 'Last refresh failed: ' + esc(d.error);
+  const st = (d.stream || {}).status, live = st === 'live';
+  const [k, title] = d.sync_paused ? ['pause', 'Sync paused by you'] : d.demo ? ['live', 'Demo feed'] : due ? ['key', 'Zerodha login needed']
+    : !d.market_open ? ['closed', d.sync_active ? 'Market closed' : 'Market closed · sync resting'] : live ? ['live', 'Live ticks'] : ['poll', 'Market open · refresh every 60 s'];
+  $('stIc').innerHTML = icon(k, title + ((d.stream || {}).detail ? ' — ' + d.stream.detail : ''));
+  $('status').innerHTML = d.updated ? `<b>${esc(hm(d.updated))}</b>` : esc(title);
+  if (live || d.demo) startLive();
+  $('streamBox').classList.toggle('hide', !(d.market_open && st === 'unavailable'));
+  $('streamBox').innerHTML = icon('poll', 'Refreshing every 60 s') + 'Live ticks unavailable: ' + esc((d.stream || {}).detail || '');
+  // Outside sync hours the figures do not change: stop refreshing and wake once when syncing resumes.
+  clearTimeout(wake);
+  if (d.sync_paused) setPace(300000);  // paused by hand: only a slow check so the warning keeps up with the market
+  else if (d.sync_active) setPace(10000);
+  else { setPace(0); wake = setTimeout(load, ((d.next_sync_seconds || 3600) + 5) * 1000); }
+  pauseUi(d);
+
+  const s = d.summary || {};
+  if (s.value !== undefined) {
+    $('value').textContent = short(s.value);
+    $('valueSub').innerHTML = `<span style="color:var(--muted)">${short(s.invested)} invested</span>`;
+    const dp = s.day_pnl || 0, dpp = s.day_pct || 0;
+    $('day').innerHTML = `<span class="${cls(dp)}">${mag(dp)}</span>`;
+    $('dayPct').innerHTML = `<span class="${cls(dpp)}">${arrow(dpp)} ${apct(dpp)}</span>`;
+    $('pnl').innerHTML = `<span class="${cls(s.pnl)}">${mag(s.pnl)}</span>`;
+    $('pnlPct').innerHTML = `<span class="${cls(s.pnl)}">${arrow(s.pnl)} ${apct(s.pnl_pct)}</span>`;
+    $('count').textContent = s.count || '';
+    const hs = d.holdings || [], n = (k, up) => hs.filter(r => up ? r[k] > 0 : r[k] < 0).length;
+    const updown = (k, word) => `<span class="chip ud" title="Holdings up / down ${word === 'total' ? 'since bought' : word}"><span class="up">▲ ${n(k, true)}</span><span class="down">▼ ${n(k, false)}</span><small>${word}</small></span>`;
+    $('chips').innerHTML = `<span class="chip" title="Holdings">${icon('stack', 'Holdings')}<b>${s.count}</b></span>` +
+      `<span class="chip" title="Gold share of the value">${icon('gold', 'Gold share')}<b>${s.gold_pct.toFixed(1)}%</b></span>` +
+      (hs.length ? updown('day_pct', d.day_of ? DAY.split(' ')[0] : 'today') + updown('pnl', 'total') : '');
+    // folded holdings: the day's best and worst in the heading line
+    const by = [...hs].sort((a, b) => b.day_pct - a.day_pct), best = by[0], worst = by[by.length - 1];
+    $('holdLast').innerHTML = hs.length ? `<span class="up">▲ ${esc(best.symbol)} ${apct(best.day_pct)}</span> · <span class="down">▼ ${esc(worst.symbol)} ${apct(worst.day_pct)}</span>` : '';
+  }
+  drawRows(d);
+  renderRange((d.extremes || {}).day);
+
+  const al = d.alerts || [];
+  $('alertCnt').textContent = al.length || '';
+  $('alertLast').textContent = al.length ? al[0].message : '';
+  $('alerts').innerHTML = al.map(a => `<li><span>${esc(a.message)}</span><small>${ago(a.ts)}</small></li>`).join('') ||
+    '<li style="color:var(--muted)">No alerts yet</li>';
+  drawChart(d);
+  drawValueBar(d);
+}
+
+const COLS = [['symbol', 'Stock'], ['last_price', 'Price'], ['chg', 'Day'], ['value', 'Value', 'w'], ['weight', 'Weight', 'w']];
+function drawRows(d) {
+  const key = r => sortKey === 'chg' ? (view === 'day' ? r.day_pnl : r.pnl) : r[sortKey];
+  const rows = [...(d.holdings || [])].sort((a, b) =>
+    (typeof key(a) === 'string' ? key(a).localeCompare(key(b)) : key(a) - key(b)) * sortDir);
+  const hd = `<div class="hr hd">${COLS.map(([k, l, w]) => `<span data-k="${k}" class="${w || ''}${k === sortKey ? ' on' : ''}">${k === 'chg' ? (view === 'day' ? (DAY === 'Today' ? 'Today' : DAY.split(' ')[0]) : 'Total') : l}${k === sortKey ? (sortDir > 0 ? ' ↑' : ' ↓') : ''}</span>`).join('')}</div>`;
+  const maxw = Math.max(1, ...rows.map(r => r.weight || 0));
+  $('rows').innerHTML = rows.length ? hd + rows.map(r => {
+    const a = view === 'day' ? r.day_pnl : r.pnl, p = view === 'day' ? r.day_pct : r.pnl_pct;
+    return `<div class="hr">
+      <span><span class="nm">${r.asset === 'Gold' ? icon('gold', 'Gold') : ''}<a class="sym" href="/stock?symbol=${encodeURIComponent(r.symbol)}">${esc(r.symbol)}</a></span>
+        <small>${r.qty} shares · avg ${inr(r.avg_price, 2)}</small></span>
+      <span class="${flash(r)}">${inr(r.last_price, 2)}<small class="vs">${short(r.value)}</small></span>
+      <span class="pv ${cls(a)}">${mag$(a)}<small class="${cls(p)}">${apct(p)}</small></span>
+      <span class="w">${short(r.value)}</span>
+      <span class="w">${r.weight.toFixed(1)}%<span class="wbar"><i style="width:${(r.weight / maxw * 100).toFixed(0)}%"></i></span></span>
+    </div>`; }).join('') : '<div class="empty">No holdings loaded yet</div>';
+  for (const [id, v] of [['vDay', 'day'], ['vTot', 'total']]) $(id).className = view === v ? 'on' : '';
+}
+$('rows').onclick = e => {
+  const h = e.target.closest('[data-k]');
+  if (!h) return;
+  sortDir = sortKey === h.dataset.k ? -sortDir : (h.dataset.k === 'symbol' ? 1 : -1); sortKey = h.dataset.k; last && drawRows(last);
+};
+function setView(v) { view = v; try { localStorage.setItem('pf.view', v); } catch (e) {} last && drawRows(last); }
+$('vDay').onclick = () => setView('day');
+$('vTot').onclick = () => setView('total');
+
+// ---- manual pause -------------------------------------------------------
+const ASK = {
+  open: 'The market is open. If you pause now, prices, P&L and alerts stop updating until you resume. If sync is still paused at 3:35 PM IST, today\u2019s closing figures and today\u2019s trades will not be recorded.',
+  sync: 'The market is closed, but the app is inside its sync hours (8:45 AM to 4:00 PM IST). If sync is still paused when the market opens, nothing will update, and if it stays paused past 3:35 PM the day\u2019s closing figures and trades will not be recorded.',
+  closed: 'The market is closed and sync is already resting until 8:45 AM IST on the next trading day, so nothing is lost by pausing now. A manual pause keeps sync off after that too, until you resume it.'
+};
+const WHILE = {
+  open: 'The market is open, so these figures are out of date and alerts are off. Resume before 3:35 PM IST or today\u2019s closing figures and trades will not be recorded.',
+  sync: 'The app is inside its sync hours, but nothing is updating. Resume before the market opens to keep today\u2019s data complete.',
+  closed: 'The market is closed, so nothing is being missed yet. Sync will stay off when the market reopens unless you resume.'
+};
+let asking = false, pauseHtml = null;
+async function setPause(on) {
+  asking = false;
+  try {
+    const r = await fetch('/api/sync', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paused: on})});
+    if (r.status === 401) { location.href = '/signin'; return; }
+  } catch (e) { /* the next load shows the true state */ }
+  load();
+}
+function pauseUi(d) {
+  const phase = d.market_phase || 'closed', btn = $('pauseBtn'), box = $('pauseBox');
+  const bk = d.sync_paused ? 'p' : 'r';
+  if (btn.dataset.k !== bk) {
+    btn.dataset.k = bk;
+    btn.innerHTML = d.sync_paused ? icon('play', 'Resume sync') : icon('pause', 'Pause sync');
+    btn.title = d.sync_paused ? 'Resume sync' : 'Pause sync';
+    btn.classList.toggle('on', !!d.sync_paused);
+  }
+  let html = '', urgent = phase === 'open';
+  if (d.sync_paused) html = `${icon('pause', 'Paused')}<b>Sync paused by you</b> since ${esc(d.paused_since)}. ${WHILE[phase]}<div class="row"><button class="btn" data-act="resume">Resume sync</button></div>`;
+  else if (asking) html = `<b>Pause sync?</b> ${ASK[phase]}<div class="row"><button class="btn" data-act="pause">Pause sync</button><button class="btn ghost" data-act="cancel">Cancel</button></div>`;
+  const key = html + urgent;
+  if (key === pauseHtml) return;  // leave the buttons alone between live updates
+  pauseHtml = key;
+  box.className = 'banner' + (html ? (urgent ? '' : ' info') : ' hide');
+  box.innerHTML = html;
+}
+$('pauseBtn').onclick = () => { if (last && last.sync_paused) setPause(false); else { asking = !asking; last && pauseUi(last); } };
+$('pauseBox').onclick = e => {
+  const act = e.target.dataset.act;
+  if (act === 'pause') setPause(true);
+  else if (act === 'resume') setPause(false);
+  else if (act === 'cancel') { asking = false; last && pauseUi(last); }
+};
+
+const prevLtp = {};
+function flash(r) {
+  const p = prevLtp[r.symbol]; prevLtp[r.symbol] = r.last_price;
+  return p === undefined || p === r.last_price ? '' : r.last_price > p ? 'tu' : 'td';
+}
+
+let es = null;
+function startLive() {
+  if (es || !window.EventSource) return;
+  es = new EventSource('/api/live');
+  es.onmessage = e => { if (last) { Object.assign(last, JSON.parse(e.data)); render(last); } };
+}
+
+function renderRange(x) {
+  if (!x) return;
+  const span = x.high - x.low;
+  const pos = Math.min(100, Math.max(0, span > 0 ? (x.current - x.low) / span * 100 : 50));
+  $('rDay').innerHTML = `<h2>${icon('range', "Day's range")}${DAY === 'Today' ? "Today's" : esc(DAY)} range</h2>
+    <div class="rng" style="margin-top:8px">
+      <div class="e" title="Lowest day P&amp;L today"><b class="${cls(x.low)}">${mag$(x.low)}</b><small>▼ low ${esc(hm(x.low_ts))}</small></div>
+      <div class="mid"><div class="track" title="Now: ${signed(x.current)}"><i style="left:${pos.toFixed(1)}%"></i><span class="${cls(x.current)}" style="left:${Math.min(85, Math.max(15, pos)).toFixed(1)}%">${mag$(x.current)}</span></div></div>
+      <div class="e" title="Highest day P&amp;L today"><b class="${cls(x.high)}">${mag$(x.high)}</b><small>▲ high ${esc(hm(x.high_ts))}</small></div>
+    </div>`;
+}
+
+function drawChart(d) {
+  if (!window.Chart) return;
+  const css = getComputedStyle(document.documentElement);
+  const v = n => css.getPropertyValue(n).trim();
+  const up = v('--up'), down = v('--down'), accent = v('--accent'), muted = v('--muted'), line = v('--line');
+  if (mode === 'total') return drawTotal(v);
+  let labels, data, type = 'bar', horiz = false;
+  if (mode === 'today') {
+    const src = (d.intraday || []).filter(p => p.ts.slice(11, 16) >= '09:15');  // from the market open
+    labels = src.map(p => hm(p.ts)); data = src.map(p => p.day_pnl); type = 'line';
+  } else if (mode === 'stocks') {
+    const rows = [...(d.holdings || [])].sort((a, b) => b.day_pnl - a.day_pnl);
+    labels = rows.map(r => r.symbol); data = rows.map(r => r.day_pnl); horiz = true;
+  } else {
+    const rows = (hist && hist.rows) || [];
+    labels = rows.map(r => r.day.slice(8) + '/' + r.day.slice(5, 7)); data = rows.map(r => r.day_pnl);
+  }
+  $('chartbox').style.height = (horiz ? Math.max(200, labels.length * 24 + 40) : (innerWidth <= 760 ? 200 : 230)) + 'px';
+  let ds;
+  if (type === 'line') {
+    const hi = data.length ? data.indexOf(Math.max(...data)) : -1, lo = data.length ? data.indexOf(Math.min(...data)) : -1;
+    const colors = data.map((_, i) => i === hi ? up : i === lo ? down : 'transparent');
+    ds = {data, borderColor: accent, backgroundColor: accent + '22', fill: 'origin', tension: .25,
+      pointRadius: data.map((_, i) => i === hi || i === lo ? 5 : 0), pointBackgroundColor: colors, pointBorderColor: colors,
+      pointHoverRadius: 4, borderWidth: 2};
+  } else {
+    ds = {data, backgroundColor: data.map(x => x >= 0 ? up : down), borderRadius: 3, maxBarThickness: 30};
+  }
+  const kind = type + (horiz ? '-h' : '');
+  if (chart && chartKind !== kind) { chart.destroy(); chart = null; }
+  if (!chart) {
+    chartKind = kind;
+    const money = {ticks: {color: muted, callback: x => sshort(x), maxTicksLimit: horiz ? 5 : 6}, grid: {color: line}};
+    const cats = {ticks: {color: muted, autoSkip: !horiz, maxTicksLimit: horiz ? undefined : 6}, grid: {display: false}};
+    chart = new Chart($('chart'), {
+      type, data: {labels, datasets: [ds]},
+      options: {indexAxis: horiz ? 'y' : 'x', responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: {mode: 'index', intersect: false, axis: horiz ? 'y' : 'x'},
+        plugins: {legend: {display: false}, tooltip: {callbacks: {label: c => signed(horiz ? c.parsed.x : c.parsed.y)}}},
+        scales: horiz ? {x: money, y: cats} : {x: cats, y: money}}
+    });
+  } else {
+    chart.data.labels = labels; Object.assign(chart.data.datasets[0], ds);
+    chart.update();
+  }
+}
+
+// Total P&L across days: the close as the bold line, the day's high and low as thin lines edging a band
+function drawTotal(v) {
+  const rows = ((hist && hist.rows) || []).filter(r => r.pnl != null);
+  const labels = rows.map(r => r.day.slice(8) + '/' + r.day.slice(5, 7));
+  const up = v('--up'), down = v('--down'), accent = v('--accent'), muted = v('--muted'), line = v('--line');
+  $('chartbox').style.height = (innerWidth <= 760 ? 220 : 250) + 'px';
+  if (chart) { chart.destroy(); chart = null; }
+  chartKind = 'band';
+  const hiAt = rows.length ? rows.reduce((a, r, i) => r.pnl_high > rows[a].pnl_high ? i : a, 0) : -1;
+  const loAt = rows.length ? rows.reduce((a, r, i) => r.pnl_low < rows[a].pnl_low ? i : a, 0) : -1;
+  const dot = (at, c) => ({pointRadius: rows.map((_, i) => i === at ? 5 : 0), pointBackgroundColor: c, pointBorderColor: c, pointHoverRadius: 3});
+  chart = new Chart($('chart'), {type: 'line', data: {labels, datasets: [
+      Object.assign({label: 'Day high', data: rows.map(r => r.pnl_high), borderColor: muted, borderWidth: 1, fill: '+2', backgroundColor: accent + '1f', tension: .15}, dot(hiAt, up)),
+      {label: 'Close', data: rows.map(r => r.pnl), borderColor: accent, borderWidth: 2.2, pointRadius: 0, pointHoverRadius: 4, tension: .15},
+      Object.assign({label: 'Day low', data: rows.map(r => r.pnl_low), borderColor: muted, borderWidth: 1, borderDash: [3, 3], tension: .15}, dot(loAt, down))]},
+    options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: 'index', intersect: false},
+      plugins: {legend: {display: true, position: 'bottom', labels: {color: muted, boxWidth: 14, boxHeight: 2, font: {size: 12}}},
+        tooltip: {callbacks: {label: c => ` ${c.dataset.label}: ${signed(c.parsed.y)}`}}},
+      scales: {x: {ticks: {color: muted, maxTicksLimit: 6}, grid: {display: false}},
+               y: {ticks: {color: muted, callback: x => sshort(x), maxTicksLimit: 6}, grid: {color: line}}}}});
+}
+
+function drawValueBar(d) {
+  // One bar for the current value: the invested part plus the P&L part. With a loss the bar spans
+  // what was invested, and the hatched red part is the amount lost.
+  const s = d.summary || {};
+  if (s.value === undefined) return;
+  const gain = s.pnl >= 0, whole = Math.max(s.value, s.invested) || 1;
+  $('invBar').style.width = ((gain ? s.invested : s.value) / whole * 100).toFixed(2) + '%';
+  $('pnlBar').style.width = (Math.abs(s.pnl) / whole * 100).toFixed(2) + '%';
+  $('pnlBar').className = gain ? 'up' : 'down';
+  $('valueBar').title = gain ? `Invested ${inr(s.invested)} + profit ${inr(s.pnl)} = ${inr(s.value)}`
+                             : `Current value ${inr(s.value)} + loss ${inr(-s.pnl)} = invested ${inr(s.invested)}`;
+}
+
+async function loadHist() {
+  try {
+    const r = await fetch('/api/history?symbol=' + encodeURIComponent(histSym));
+    if (r.status === 401) { location.href = '/signin'; return; }
+    hist = await r.json();
+    const sel = $('histSym'), want = ['', ...hist.symbols];
+    if ([...sel.options].map(o => o.value).join('|') !== want.join('|')) {
+      sel.innerHTML = want.map(s => `<option value="${esc(s)}">${s ? esc(s) : 'All'}</option>`).join('');
+      sel.value = histSym;
+    }
+    if ((mode === 'daily' || mode === 'total') && last) drawChart(last);
+  } catch (e) { /* keep the last chart */ }
+}
+
+function setMode(m) {
+  mode = m;
+  for (const [id, k] of [['tToday', 'today'], ['tStocks', 'stocks'], ['tDaily', 'daily'], ['tTotal', 'total']]) $(id).className = k === m ? 'on' : '';
+  $('histSym').classList.toggle('hide', m !== 'daily' && m !== 'total');
+  if (m === 'daily' || m === 'total') loadHist();
+  last && drawChart(last);
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/data');
+    if (r.status === 401) { location.href = '/signin'; return; }
+    render(await r.json());
+    if (mode === 'daily' || mode === 'total') loadHist();
+  }
+  catch (e) {
+    $('stIc').innerHTML = icon('err', 'Cannot reach the dashboard app'); $('status').textContent = 'Offline';
+    if (!pace) { clearTimeout(wake); wake = setTimeout(load, 60000); }
+  }
+}
+$('tToday').onclick = () => setMode('today');
+$('tStocks').onclick = () => setMode('stocks');
+$('tDaily').onclick = () => setMode('daily');
+$('tTotal').onclick = () => setMode('total');
+$('histSym').onchange = e => { histSym = e.target.value; loadHist(); };
+$('testBtn').onclick = async () => {
+  const b = $('testBtn');
+  b.textContent = 'Sending…';
+  try {
+    const res = await fetch('/api/test-alert', {method: 'POST'});
+    if (res.status === 401) { location.href = '/signin'; return; }
+    const r = await res.json();
+    b.textContent = r.result.join('; ');
+  } catch (e) { b.textContent = 'Failed'; }
+  setTimeout(() => b.innerHTML = icon('send', 'Send a test alert'), 6000);
+};
+let timer = null, pace = -1, wake = null;
+function setPace(ms) { if (ms !== pace) { pace = ms; clearInterval(timer); timer = ms ? setInterval(load, ms) : null; } }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !pace) load(); });  // one refresh when reopened
+load(); setPace(10000);
+</script>
+</body>
+</html>

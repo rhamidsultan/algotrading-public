@@ -1,0 +1,15 @@
+[Unit]
+Description=IBKR US holdings sync (read-only)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ibkr
+EnvironmentFile=/home/ubuntu/ibkr/.env
+ExecStart=/home/ubuntu/ibkr/venv/bin/python ibkr_sync.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

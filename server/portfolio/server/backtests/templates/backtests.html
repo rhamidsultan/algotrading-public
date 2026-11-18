@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backtests</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#6b7280;--line:#e5e7eb;--up:#0a8f5b;--down:#d1373f;--accent:#2f6fed;--warn:#b7791f;--grid:#eef0f3;
+  --s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--sel:#eef3fe}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#e8eaee;--muted:#8b93a1;--line:#272b35;--up:#34c98a;--down:#f0626a;--accent:#6c9bff;--warn:#e0b34a;--grid:#22262f;
+  --s1:#3987e5;--s2:#d95926;--s3:#199e70;--sel:#1d2534}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+h1{font-size:20px;margin:0}
+h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600}
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.status a{color:var(--muted)}
+.tag{font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid var(--muted);color:var(--muted);margin-left:6px;vertical-align:middle;font-weight:500}
+.tag.warn{border-color:var(--warn);color:var(--warn)}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.card .big{font-size:22px;font-weight:650;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .sub{font-size:13px;margin-top:2px;color:var(--muted);font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.down{color:var(--down)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.section{margin-top:12px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th.l,td.l{text-align:left}
+th{font-size:12px;color:var(--muted);font-weight:600}
+#runs tr{cursor:pointer}
+#runs tr.sel td{background:var(--sel)}
+#runs tr:hover td{background:var(--sel)}
+td.note{white-space:normal;min-width:0;max-width:180px;color:var(--muted);font-size:13px;text-align:left}
+dl{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;font-size:14px;font-variant-numeric:tabular-nums}
+dt{color:var(--muted)}dd{margin:0;text-align:right;overflow-wrap:anywhere}
+.chartbox{height:280px;position:relative}
+.chartbox.small{height:150px}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+.btn.danger{background:transparent;color:var(--down);border:1px solid var(--line)}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.banner{background:var(--card);border:1px solid var(--warn);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+.empty{background:var(--card);border:1px dashed var(--line);border-radius:12px;padding:22px;color:var(--muted);font-size:14px}
+.empty code{background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--text)}
+.note{color:var(--muted);font-size:12px;margin-top:8px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:-2px 0 8px}
+.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+.hide{display:none}
+.show-sm{display:none}
+pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0;color:var(--muted)}
+input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+@media (max-width:760px){.cards{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.card .big{font-size:19px}
+  .hide-sm{display:none}.chartbox{height:230px}
+  .show-sm{display:block;color:var(--muted);font-size:12px;white-space:normal}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Backtests <span class="tag">RUN ON THE MAC</span></h1>
+    <div class="status"><span id="status">Loading…</span> · <a href="/">Portfolio</a> · <a href="/algo">Blaze Butterfly</a> · <a href="/signout">Sign out</a></div>
+  </header>
+
+  <div id="emptyBox" class="empty hide">
+    No backtests here yet. Run one in Algo Lab on the Mac, then send it with
+    <code>.venv/bin/python run.py publish</code> (or the <b>Send to dashboard</b> button under the results).
+  </div>
+
+  <div id="main" class="hide">
+    <div class="card">
+      <h2>Runs <span class="note" style="font-weight:400">— tap a row to open it; tick up to 3 to compare their P&amp;L</span></h2>
+      <div class="scroll"><table>
+        <thead><tr><th class="l" title="Compare">⇄</th><th class="l hide-sm">Saved</th><th class="l">Strategy</th><th class="l hide-sm">Period</th>
+          <th>Net P&amp;L</th><th>Max DD</th><th class="hide-sm">Return / DD</th><th class="hide-sm">Worst week</th><th>Cycles</th><th class="hide-sm">Win %</th><th class="l hide-sm">Note</th></tr></thead>
+        <tbody id="runs"></tbody>
+      </table></div>
+    </div>
+
+    <div class="banner hide section" id="banner"></div>
+
+    <div class="section" id="detail">
+      <div class="cards">
+        <div class="card"><div class="label">Net P&amp;L</div><div class="big" id="cNet">–</div><div class="sub" id="cNetSub"></div></div>
+        <div class="card"><div class="label">Max drawdown</div><div class="big" id="cDD">–</div><div class="sub" id="cDDSub"></div></div>
+        <div class="card"><div class="label">Return / drawdown</div><div class="big" id="cRD">–</div><div class="sub" id="cRDSub"></div></div>
+        <div class="card"><div class="label">Cycles won</div><div class="big" id="cWin">–</div><div class="sub" id="cWinSub"></div></div>
+      </div>
+
+      <div class="card section">
+        <h2 id="chartTitle">P&amp;L after charges</h2>
+        <div class="legend" id="legend"></div>
+        <div class="chartbox"><canvas id="pnl"></canvas></div>
+        <h2 class="section" id="ddTitle">Drawdown from the peak</h2>
+        <div class="chartbox small"><canvas id="dd"></canvas></div>
+        <div class="note" id="chartNote"></div>
+      </div>
+
+      <div class="grid2">
+        <div class="card"><h2>Settings</h2><dl id="params"></dl><div class="note" id="runInfo"></div></div>
+        <div class="card"><h2>All figures</h2><dl id="metrics"></dl></div>
+      </div>
+
+      <div class="card section">
+        <div class="controls" style="justify-content:space-between;margin-bottom:8px">
+          <h2 style="margin:0">Cycles</h2>
+          <div class="controls">
+            <button class="btn ghost" id="btnLegs">Show legs</button>
+            <button class="btn ghost" id="btnLog">Show log</button>
+            <button class="btn danger" id="btnDelete">Delete run</button>
+          </div>
+        </div>
+        <div class="scroll"><table>
+          <thead><tr><th class="l">#</th><th class="l">Entered</th><th class="l">Exited</th><th class="hide-sm">Legs</th><th class="hide-sm">Charges</th><th>Net P&amp;L</th><th class="l">Why it closed</th></tr></thead>
+          <tbody id="cycles"></tbody>
+        </table></div>
+        <div id="legsBox" class="section hide"><h2>Legs</h2><div class="scroll"><table>
+          <thead><tr><th class="l">Cycle</th><th class="l">Contract</th><th class="l">Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P&amp;L</th><th class="l">Reason</th></tr></thead>
+          <tbody id="legs"></tbody></table></div></div>
+        <div id="logBox" class="section hide"><h2>Strategy log (last 400 lines)</h2><pre id="log"></pre></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const TITLES = {short_straddle: "Short straddle", intraday_straddle: "Intraday straddle", blaze_butterfly: "Blaze Butterfly"};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const SERIES = ["--s1", "--s2", "--s3"];
+let runs = [], current = null, compare = [], cache = {}, charts = {};
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = v => (v === null || v === undefined || v === "" || isNaN(+v)) ? null : +v;
+function inr(v, sign) {
+  v = num(v); if (v === null) return "–";
+  const s = "₹" + Math.abs(Math.round(v)).toLocaleString("en-IN");
+  return v < 0 ? "-" + s : (sign && v > 0 ? "+" + s : s);
+}
+const cls = v => num(v) === null ? "" : (num(v) > 0 ? "up" : num(v) < 0 ? "down" : "");
+const title = s => TITLES[s] || s;
+const day = s => s ? String(s).slice(0, 10) : "";
+function when(s) {
+  if (!s) return "";
+  const d = new Date(String(s).replace(" ", "T"));
+  return isNaN(d) ? s : d.toLocaleDateString("en-IN", {day: "numeric", month: "short", year: "2-digit"}) +
+    (String(s).length > 10 ? " " + d.toLocaleTimeString("en-IN", {hour: "2-digit", minute: "2-digit", hour12: false}) : "");
+}
+function period(r) {
+  const a = r.data_from || r.from, b = r.data_to || r.to;
+  return a || b ? `${when(day(a)) || "start"} – ${when(day(b)) || "end"}` : "all data";
+}
+
+async function getJSON(url, opt) {
+  const r = await fetch(url, Object.assign({credentials: "same-origin"}, opt || {}));
+  if (r.status === 401) { location.href = "/signin?next=/backtests"; throw new Error("signed out"); }
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+async function loadList(selectName) {
+  const j = await getJSON("/api/backtests");
+  runs = j.runs;
+  document.getElementById("status").textContent = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
+  document.getElementById("emptyBox").classList.toggle("hide", runs.length > 0);
+  document.getElementById("main").classList.toggle("hide", runs.length === 0);
+  compare = compare.filter(n => runs.some(r => r.name === n));
+  renderList();
+  if (!runs.length) return;
+  const want = selectName || new URLSearchParams(location.search).get("run");
+  await select(runs.some(r => r.name === want) ? want : runs[0].name);
+}
+
+function renderList() {
+  document.getElementById("runs").innerHTML = runs.map(r => {
+    const m = r.metrics || {};
+    return `<tr data-name="${esc(r.name)}" class="${current && current.name === r.name ? "sel" : ""}">
+      <td class="l"><input type="checkbox" aria-label="Compare" ${compare.includes(r.name) ? "checked" : ""} data-cmp="${esc(r.name)}"></td>
+      <td class="l hide-sm">${esc(when(r.saved))}</td><td class="l">${esc(title(r.strategy))}${String(r.dataset || "").startsWith("SAMPLE") ? '<span class="tag warn">SAMPLE</span>' : ""}<span class="show-sm">${esc(r.note || when(r.saved))}</span></td>
+      <td class="l hide-sm">${esc(period(r))}</td>
+      <td class="${cls(m["Net P&L"])}">${inr(m["Net P&L"])}</td><td class="down">${inr(m["Max drawdown"])}</td>
+      <td class="hide-sm">${m["Return / drawdown"] ?? "–"}</td><td class="hide-sm ${cls(m["Worst week"])}">${inr(m["Worst week"])}</td>
+      <td>${m["Cycles"] ?? "–"}</td><td class="hide-sm">${m["Win rate %"] ?? "–"}</td><td class="note hide-sm">${esc(r.note)}</td></tr>`;
+  }).join("");
+}
+
+document.getElementById("runs").addEventListener("click", e => {
+  const box = e.target.closest("input[data-cmp]");
+  if (box) {
+    const n = box.dataset.cmp;
+    if (box.checked) {
+      if (compare.length >= 3) { box.checked = false; alertNote("Compare up to 3 runs at a time."); return; }
+      compare.push(n);
+    } else compare = compare.filter(x => x !== n);
+    drawCharts();
+    return;
+  }
+  const tr = e.target.closest("tr[data-name]");
+  if (tr) select(tr.dataset.name);
+});
+
+function alertNote(t) { document.getElementById("chartNote").textContent = t; }
+
+async function fetchRun(name) {
+  if (!cache[name]) cache[name] = await getJSON("/api/backtests/" + encodeURIComponent(name));
+  return cache[name];
+}
+
+async function select(name) {
+  current = await fetchRun(name);
+  history.replaceState(null, "", "/backtests?run=" + encodeURIComponent(name));
+  renderList();
+  renderDetail();
+  await drawCharts();
+}
+
+function renderDetail() {
+  const d = current, m = d.meta.metrics || {}, cap = d.capital;
+  const set = (id, html, c) => { const el = document.getElementById(id); el.innerHTML = html; el.className = el.className.replace(/\b(up|down)\b/g, "").trim() + (c ? " " + c : ""); };
+  set("cNet", inr(m["Net P&L"], true), cls(m["Net P&L"]));
+  document.getElementById("cNetSub").textContent = `${m["Return on capital %"] ?? "–"}% on ${inr(cap)} · ${m["Annualised return %"] ?? "–"}% a year`;
+  set("cDD", inr(m["Max drawdown"]), "down");
+  document.getElementById("cDDSub").textContent = `${m["Max drawdown %"] ?? "–"}% · longest ${m["Longest drawdown (days)"] ?? "–"} days under water`;
+  set("cRD", m["Return / drawdown"] ?? "–");
+  document.getElementById("cRDSub").textContent = `Worst week ${inr(m["Worst week"])}`;
+  set("cWin", m["Win rate %"] !== undefined ? m["Win rate %"] + "%" : "–");
+  document.getElementById("cWinSub").textContent = `${m["Cycles"] ?? 0} cycles · profit factor ${m["Profit factor"] ?? "–"}`;
+
+  const real = String(m["Fills on real option prices"] || "");
+  const sample = String(d.meta.dataset || "").startsWith("SAMPLE");
+  const ban = document.getElementById("banner");
+  const warn = [];
+  if (sample) warn.push("This run used <b>synthetic sample data</b>. Its numbers say nothing about the real market.");
+  if (real && real !== "100%") warn.push(`Only <b>${esc(real)}</b> of fills used real option prices; the rest are modelled (Black-Scholes on India VIX, no skew). Treat the result as indicative${d.meta.strategy === "blaze_butterfly" ? ", especially for the far put of the butterfly" : ""}.`);
+  ban.innerHTML = warn.join("<br>");
+  ban.classList.toggle("hide", !warn.length);
+
+  const p = d.meta.params || {};
+  document.getElementById("params").innerHTML = Object.entries(p).map(([k, v]) => `<dt>${esc(k.replace(/_/g, " "))}</dt><dd>${esc(v)}</dd>`).join("") ||
+    "<dt>Defaults</dt><dd></dd>";
+  const s = d.settings || {};
+  document.getElementById("runInfo").innerHTML =
+    `${esc(title(d.meta.strategy))} on ${esc(d.meta.dataset)} (${esc(period(Object.assign({}, d.meta, {data_from: d.meta.data_from, data_to: d.meta.data_to})))}).<br>` +
+    `Slippage ${esc(s.slippage_pct)}% · stops checked on ${s.intrabar === "close" ? "bar closes" : "bar open/high/low/close"} · ` +
+    `code ${esc(d.meta.code)} · data ${esc((d.meta.data || {}).sha256 || "")}<br>Saved ${esc(when(d.meta.saved))}` +
+    (d.meta.note ? ` · “${esc(d.meta.note)}”` : "");
+  const skip = new Set(["Net P&L", "Max drawdown", "Return / drawdown", "Win rate %"]);
+  document.getElementById("metrics").innerHTML = Object.entries(m).filter(([k]) => !skip.has(k)).map(([k, v]) => {
+    const money = ["Charges paid", "Avg win", "Avg loss", "Best cycle", "Worst cycle", "Worst week"].includes(k);
+    const colour = money && k !== "Charges paid" ? cls(v) : "";
+    return `<dt>${esc(k)}</dt><dd class="${colour}">${money ? inr(v) : esc(v ?? "–")}</dd>`;
+  }).join("");
+
+  document.getElementById("cycles").innerHTML = (d.cycles || []).map((c, i) =>
+    `<tr><td class="l">${i + 1}</td><td class="l">${esc(when(c.entry_time))}</td><td class="l">${esc(when(c.exit_time))}</td>
+     <td class="hide-sm">${c.legs ?? ""}</td><td class="hide-sm">${inr(c.costs)}</td><td class="${cls(c.net_pnl)}">${inr(c.net_pnl)}</td>
+     <td class="l">${esc(c.exit_reason)}</td></tr>`).join("") ||
+    '<tr><td class="l" colspan="7" style="color:var(--muted)">No completed cycles.</td></tr>';
+  document.getElementById("legsBox").classList.add("hide");
+  document.getElementById("logBox").classList.add("hide");
+  document.getElementById("btnLegs").textContent = "Show legs";
+  document.getElementById("btnLog").textContent = "Show log";
+}
+
+function series(run) {
+  const cap = run.capital || 0;
+  let peak = -Infinity;
+  return (run.equity || []).map(r => {
+    const close = num(r.equity), low = num(r.low) ?? close;
+    peak = Math.max(peak, close);
+    return {date: day(r.date), pnl: close - cap, dd: Math.min(low, close) - peak};
+  });
+}
+
+async function drawCharts() {
+  const names = compare.length ? compare.slice() : [current.name];
+  const data = await Promise.all(names.map(fetchRun));
+  const dates = [...new Set(data.flatMap(series).map(p => p.date))].sort();
+  const many = data.length > 1;
+  const sets = data.map((run, i) => {
+    const map = Object.fromEntries(series(run).map(p => [p.date, p]));
+    const color = many ? css(SERIES[i]) : css("--accent");
+    const label = `${title(run.meta.strategy)} · ${run.meta.note || when(run.meta.saved)}`;
+    return {label, color, pnl: dates.map(d => map[d] ? map[d].pnl : null), dd: dates.map(d => map[d] ? map[d].dd : null)};
+  });
+  document.getElementById("chartTitle").textContent = many ? "P&L after charges — comparing" : "P&L after charges";
+  document.getElementById("legend").innerHTML = many ? sets.map(s => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("") : "";
+  document.getElementById("chartNote").textContent = (many ? "Comparing ticked runs. " : "") +
+    "One point per trading day (closing value); drawdown uses the day's lowest value.";
+  const grid = css("--grid"), muted = css("--muted");
+  const base = (money) => ({
+    responsive: true, maintainAspectRatio: false, animation: false, spanGaps: true,
+    interaction: {mode: "index", intersect: false},
+    plugins: {legend: {display: false}, tooltip: {callbacks: {label: c => ` ${many ? c.dataset.label + ": " : ""}${inr(c.parsed.y, true)}`}}},
+    scales: {
+      x: {grid: {display: false}, ticks: {color: muted, maxTicksLimit: window.innerWidth < 600 ? 4 : 7, maxRotation: 0, autoSkipPadding: 12, callback(v) { return when(this.getLabelForValue(v)); }}},
+      y: {grid: {color: grid}, border: {display: false}, ticks: {color: muted, maxTicksLimit: 5, callback: v => inr(v)}}
+    }
+  });
+  const mk = (id, key, fill) => {
+    if (charts[id]) charts[id].destroy();
+    charts[id] = new Chart(document.getElementById(id), {
+      type: "line",
+      data: {labels: dates, datasets: sets.map(s => ({label: s.label, data: s[key], borderColor: key === "dd" && !many ? css("--down") : s.color,
+        backgroundColor: (key === "dd" && !many ? css("--down") : s.color) + "22", borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+        fill: fill && !many ? "origin" : false, tension: 0}))},
+      options: base()
+    });
+  };
+  mk("pnl", "pnl", false);
+  mk("dd", "dd", true);
+}
+
+document.getElementById("btnLegs").addEventListener("click", async () => {
+  const box = document.getElementById("legsBox"), b = document.getElementById("btnLegs");
+  if (!box.classList.contains("hide")) { box.classList.add("hide"); b.textContent = "Show legs"; return; }
+  const j = await getJSON(`/api/backtests/${encodeURIComponent(current.name)}?trades=1`);
+  document.getElementById("legs").innerHTML = (j.trades || []).map(t =>
+    `<tr><td class="l">${esc(String(t.group).split(" | ")[0])}</td><td class="l">${esc(t.contract)}</td><td class="l">${esc(t.side)}</td><td>${t.qty ?? ""}</td>
+     <td>${num(t.entry_price)?.toFixed(2) ?? ""}</td><td>${num(t.exit_price)?.toFixed(2) ?? ""}</td><td class="${cls(t.net_pnl)}">${inr(t.net_pnl)}</td><td class="l">${esc(t.reason)}</td></tr>`).join("");
+  box.classList.remove("hide"); b.textContent = "Hide legs";
+});
+document.getElementById("btnLog").addEventListener("click", async () => {
+  const box = document.getElementById("logBox"), b = document.getElementById("btnLog");
+  if (!box.classList.contains("hide")) { box.classList.add("hide"); b.textContent = "Show log"; return; }
+  const j = await getJSON(`/api/backtests/${encodeURIComponent(current.name)}?log=1`);
+  document.getElementById("log").textContent = (j.log || []).join("\n") || "No log.";
+  box.classList.remove("hide"); b.textContent = "Hide log";
+});
+document.getElementById("btnDelete").addEventListener("click", async () => {
+  const b = document.getElementById("btnDelete");
+  if (b.dataset.armed !== current.name) {
+    b.dataset.armed = current.name; b.textContent = "Tap again to delete";
+    setTimeout(() => { if (b.dataset.armed) { b.dataset.armed = ""; b.textContent = "Delete run"; } }, 4000);
+    return;
+  }
+  b.dataset.armed = ""; b.textContent = "Delete run";
+  await getJSON(`/api/backtests/${encodeURIComponent(current.name)}/delete`, {method: "POST"});
+  delete cache[current.name];
+  compare = compare.filter(n => n !== current.name);
+  current = null;
+  history.replaceState(null, "", "/backtests");
+  await loadList();
+});
+
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => current && drawCharts());
+loadList().catch(e => { document.getElementById("status").textContent = "Could not load: " + e.message; });
+</script>
+</body>
+</html>

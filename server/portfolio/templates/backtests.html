@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backtests</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#646b78;--line:#e5e7eb;--up:#087a4c;--down:#c8323a;--accent:#2f6fed;--warn:#a06a1a;--grid:#eef0f3;
+  --s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--sel:#eef3fe}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#e8eaee;--muted:#8b93a1;--line:#272b35;--up:#34c98a;--down:#f0626a;--accent:#6c9bff;--warn:#e0b34a;--grid:#22262f;
+  --s1:#3987e5;--s2:#d95926;--s3:#199e70;--sel:#1d2534}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+h1{font-size:20px;margin:0}
+h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600}
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.status a{color:var(--muted)}
+.tag{font-size:12px;padding:1px 6px;border-radius:4px;border:1px solid var(--muted);color:var(--muted);margin-left:6px;vertical-align:middle;font-weight:500}
+.tag.warn{border-color:var(--warn);color:var(--warn)}
+.ic{width:15px;height:15px;display:inline-block;vertical-align:-3px;flex:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0;margin-top:12px}
+.up{color:var(--up)}.down{color:var(--down)}
+.cnt{font-size:12px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0}
+h2.t{font-size:13px;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:6px;margin:0}
+.hint{font-size:12px;color:var(--muted);margin:4px 0 6px;display:flex;align-items:center;gap:6px}
+/* runs: two-line rows */
+.rl{font-variant-numeric:tabular-nums}
+.rr{display:grid;grid-template-columns:24px minmax(0,1fr) 150px 92px 80px minmax(80px,auto) minmax(64px,auto) 30px;gap:0 12px;align-items:center;padding:8px 4px;border-top:1px solid var(--line);cursor:pointer;border-radius:6px}
+.rr.hd{cursor:default;border-top:0;padding:0 4px 4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.rr:not(.hd):hover,.rr.sel{background:var(--sel)}
+.rr>span{text-align:right;white-space:nowrap}.rr>span:nth-child(2){text-align:left;min-width:0}
+.rr .nm{font-weight:600;font-size:14px;display:flex;align-items:center;gap:6px;min-width:0}
+.rr .nm .tx{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rr small{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rr small.down{color:var(--down)}
+.rr .pv{font-weight:650}
+.del{border:0;background:none;color:var(--muted);cursor:pointer;padding:4px;border-radius:6px;display:inline-flex;align-items:center}
+.del svg{width:16px;height:16px}.del.armed{color:#fff;background:var(--down)}
+.sw{display:grid;grid-template-columns:minmax(0,1fr) auto 30px;gap:0 10px;align-items:center;padding:8px 4px;border-top:1px solid var(--line);cursor:pointer;border-radius:6px}
+.sw:hover{background:var(--sel)}.sw small{display:block;font-size:12px;color:var(--muted)}.sw .nm{font-weight:600;font-size:14px}
+.tag{font-size:11px;padding:0 5px;border-radius:4px;border:1px solid var(--warn);color:var(--warn);font-weight:600;flex:none}
+/* run numbers */
+.nums{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:10px;font-variant-numeric:tabular-nums}
+.nums .lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.nums .nv{font-size:20px;font-weight:700;line-height:1.25;white-space:nowrap}
+.nums>div:first-child .nv{font-size:23px}
+.nums .ns{font-size:12px;color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip b{color:var(--text);font-weight:600}.chip b.down{color:var(--down)}.chip b.up{color:var(--up)}.chip .ic{width:13px;height:13px;vertical-align:-2px}
+.rhead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.rhead .nm{font-weight:650;font-size:16px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rhead .sub{font-size:12px;color:var(--muted)}
+.acts{display:flex;gap:6px;margin-left:auto;flex:none}
+.ibtn{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:34px;min-width:34px;padding:0 8px;border-radius:9px;
+  border:1px solid var(--line);color:var(--accent);background:var(--card);font:600 12.5px system-ui,-apple-system,sans-serif;cursor:pointer}
+.ibtn .ic{width:16px;height:16px;vertical-align:0}
+.ibtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.ibtn.danger{color:var(--down)}
+.ibtn.armed{background:var(--down);border-color:var(--down);color:#fff}
+dl{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:10px 0 0;font-size:14px;font-variant-numeric:tabular-nums}
+dt{color:var(--muted)}dd{margin:0;text-align:right;overflow-wrap:anywhere}
+.chartbox{height:260px;position:relative}
+.chartbox.small{height:130px;margin-top:6px}
+.sub2{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:10px;display:flex;align-items:center;gap:5px}
+.banner{background:var(--card);border:1px solid var(--warn);border-radius:12px;padding:12px 14px;margin-top:12px;font-size:14px}
+.banner .ic{color:var(--warn);width:16px;height:16px;margin-right:4px}
+.empty{background:var(--card);border:1px dashed var(--line);border-radius:12px;padding:22px;color:var(--muted);font-size:14px}
+.empty code{background:var(--bg);padding:2px 6px;border-radius:4px;color:var(--text)}
+.note{color:var(--muted);font-size:12px;margin-top:8px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin:8px 0}
+.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+.hide{display:none!important}
+/* cycles */
+/* P&L calendar: one square per trading day, a month per block */
+.calbar{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px}
+.calbar button{font:inherit;font-size:13px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:none;color:var(--text);cursor:pointer}
+.calbar button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.months{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.mon .mt{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:4px;font-variant-numeric:tabular-nums}
+.mgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+.mgrid i{aspect-ratio:1;border-radius:4px;background:var(--line);opacity:.35;display:block}
+.mgrid b{aspect-ratio:1;border-radius:4px;display:block;cursor:pointer}
+.mgrid b.sel{outline:2px solid var(--text);outline-offset:1px}
+.dayx{margin-top:10px;font-size:13px;font-variant-numeric:tabular-nums}
+.cl{font-variant-numeric:tabular-nums}
+.cr{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:0 10px;align-items:center;padding:7px 2px;border-top:1px solid var(--line)}
+.cr .no{font-size:12px;color:var(--muted);text-align:center}
+.cr b{font-weight:600;font-size:13.5px}.cr small{display:block;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cr>span:last-child{text-align:right;font-weight:650}
+.cr{cursor:pointer;-webkit-tap-highlight-color:transparent}
+.cr:hover{background:var(--bg)}
+.cr .nv{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+.cr .chev2{display:inline-flex;color:var(--muted);transition:transform .2s}
+.cr.open .chev2{transform:rotate(90deg)}
+.cx{padding:2px 0 10px 40px;font-size:13px}
+.cx .lg{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:7px 0;border-top:1px dashed var(--line)}
+.cx .lg:first-child{border-top:0}
+.cx .lg b{font-weight:600}
+.cx .lg .pn{text-align:right;font-weight:650}
+.cx .lg small{grid-column:1/-1;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.cx .tag{font-size:11px;font-weight:650;padding:1px 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-left:4px}
+@media (max-width:760px){.cx{padding-left:8px}}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{padding:7px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th.l,td.l{text-align:left}
+th{font-size:12px;color:var(--muted);font-weight:600}
+details.sec>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary .chev{display:inline-flex;margin-left:auto;color:var(--muted);transition:transform .2s}
+details.sec[open]>summary .chev{transform:rotate(90deg)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:8px 0 0;color:var(--muted)}
+input[type=checkbox]{width:24px;height:24px;accent-color:var(--accent);cursor:pointer;margin:0}
+.w{}
+@media (max-width:760px){
+  .rr{grid-template-columns:22px minmax(0,1fr) minmax(76px,auto) minmax(52px,auto) 28px;gap:0 10px}
+  .rr .w{display:none}
+  .grid2{grid-template-columns:1fr}
+  .nums .nv{font-size:17px}.nums>div:first-child .nv{font-size:19px}
+  .chartbox{height:220px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="status"><span id="macIc"></span><span id="status">Loading…</span></div>
+  </header>
+
+  <div id="emptyBox" class="empty hide">
+    No backtests here yet. Run one in Algo Lab on the Mac, then send it with
+    <code>.venv/bin/python run.py publish</code> (or the <b>Send to dashboard</b> button under the results).
+  </div>
+
+  <div id="main" class="hide">
+    <div class="card" style="margin-top:0">
+      <h2 class="t"><span id="runsIc"></span>Runs <span class="cnt" id="runCnt"></span></h2>
+      <div class="hint"><span id="cmpIc"></span>tick up to 3 to compare</div>
+      <div class="rl" id="runs"></div>
+    </div>
+    <div class="card hide" id="swCard">
+      <h2 class="t">Sweeps <span class="cnt" id="swCnt"></span></h2>
+      <div class="hint">Sweeps, Find best settings and backtests that did not finish. Tap one to open it.</div>
+      <div id="sweeps"></div>
+    </div>
+
+    <div class="banner hide" id="banner"></div>
+
+    <div id="detail">
+      <div class="card">
+        <div class="rhead">
+          <div style="min-width:0"><div class="nm" id="dName"></div><div class="sub" id="dSub"></div></div>
+          <div class="acts">
+            <button class="ibtn" id="btnLegs" type="button" title="Show legs"></button>
+            <button class="ibtn" id="btnLog" type="button" title="Show log"></button>
+            <button class="ibtn danger" id="btnDelete" type="button" title="Delete run"></button>
+          </div>
+        </div>
+        <div class="nums">
+          <div><div class="lbl">Net P&amp;L</div><div class="nv" id="cNet">–</div><div class="ns" id="cNetSub"></div></div>
+          <div><div class="lbl">Max DD</div><div class="nv down" id="cDD">–</div><div class="ns" id="cDDSub"></div></div>
+          <div><div class="lbl">Ret / DD</div><div class="nv" id="cRD">–</div><div class="ns" id="cRDSub"></div></div>
+        </div>
+        <div class="chips" id="chips"></div>
+      </div>
+
+      <div class="card">
+        <div class="legend" id="legend"></div>
+        <div class="chartbox"><canvas id="pnl"></canvas></div>
+        <div class="sub2" id="ddTitle" title="Fall from the highest P&amp;L so far, using each day's lowest value">▼ Drawdown</div>
+        <div class="chartbox small"><canvas id="dd"></canvas></div>
+        <div class="note" id="chartNote"></div>
+      </div>
+
+      <div class="card">
+        <h2 class="t">Calendar <span class="cnt" id="calCnt"></span></h2>
+        <div class="calbar" id="calYears"></div>
+        <div class="months" id="calMonths"></div>
+        <div class="dayx" id="calDay"></div>
+        <div class="note">Each square is a trading day, coloured by that day's P&amp;L after charges. Tap one for its cycles.</div>
+      </div>
+
+      <div class="card">
+        <h2 class="t">Breakdown</h2>
+        <div class="calbar" id="bdBy"><button type="button" data-b="year" class="on">Year</button><button type="button" data-b="month">Month</button><button type="button" data-b="weekday">Weekday</button><button type="button" data-b="reason">Exit reason</button></div>
+        <div class="scroll"><table id="bd"></table></div>
+        <div class="note">Cycles grouped by when they closed (weekday: when they opened). Net after charges.</div>
+      </div>
+
+      <div class="card">
+        <h2 class="t"><span id="cycIc"></span>Cycles <span class="cnt" id="cycCnt"></span></h2>
+        <div class="cl" id="cycles"></div>
+        <div id="legsBox" class="hide"><div class="sub2">Legs</div><div class="scroll"><table>
+          <thead><tr><th class="l">Cycle</th><th class="l">Contract</th><th class="l">Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net</th><th class="l">Reason</th></tr></thead>
+          <tbody id="legs"></tbody></table></div></div>
+        <div id="logBox" class="hide"><div class="sub2">Strategy log (last 400 lines)</div><pre id="log"></pre></div>
+      </div>
+
+      <div class="grid2">
+        <details class="card sec"><summary><h2 class="t"><span id="setIc"></span>Settings</h2><span class="chev"></span></summary><dl id="params"></dl><div class="note" id="runInfo"></div></details>
+        <details class="card sec"><summary><h2 class="t"><span id="figIc"></span>All figures</h2><span class="chev"></span></summary><dl id="metrics"></dl></details>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const TITLES = {short_straddle: "Positional straddle", intraday_straddle: "Intraday straddle", intraday_strangle: "Intraday strangle",
+  premium_strangle: "Premium strangle", iron_fly: "Iron fly / condor", event_iron_fly: "Event iron fly", double_calendar: "Double calendar",
+  put_credit_spread: "Put credit spread", blaze_butterfly: "Blaze butterfly", straddle_trend_switch: "Straddle grid trend"};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const SERIES = ["--s1", "--s2", "--s3"];
+let runs = [], current = null, compare = [], cache = {}, charts = {};
+const $ = id => document.getElementById(id);
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = v => (v === null || v === undefined || v === "" || isNaN(+v)) ? null : +v;
+function inr(v, sign) {
+  v = num(v); if (v === null) return "–";
+  const s = "₹" + Math.abs(Math.round(v)).toLocaleString("en-IN");
+  return v < 0 ? "-" + s : (sign && v > 0 ? "+" + s : s);
+}
+// coloured figures carry no + / −: green and red already say which way
+const mag = v => num(v) === null ? "–" : inr(Math.abs(num(v)));
+const lakh = v => { v = num(v); if (v === null) return "–"; const a = Math.abs(v);
+  return a >= 1e7 ? "₹" + (a / 1e7).toFixed(2) + " Cr" : a >= 1e5 ? "₹" + (a / 1e5).toFixed(2) + " L" : inr(a); };
+const cls = v => num(v) === null ? "" : (num(v) > 0 ? "up" : num(v) < 0 ? "down" : "");
+const title = s => TITLES[s] || s;
+const day = s => s ? String(s).slice(0, 10) : "";
+function when(s) {
+  if (!s) return "";
+  const d = new Date(String(s).replace(" ", "T"));
+  return isNaN(d) ? s : d.toLocaleDateString("en-IN", {day: "numeric", month: "short", year: "2-digit"}) +
+    (String(s).length > 10 ? " " + d.toLocaleTimeString("en-IN", {hour: "2-digit", minute: "2-digit", hour12: false}) : "");
+}
+// "12 Mar 26 09:20 → 15:10" when a cycle opens and closes the same day
+function span2(a, b) { const x = when(a), y = when(b);
+  return day(a) && day(a) === day(b) && String(b).length > 10 ? `${x} → ${y.split(" ").pop()}` : `${x} → ${y}`; }
+function period(r) {
+  const a = r.data_from || r.from, b = r.data_to || r.to;
+  return a || b ? `${when(day(a)) || "start"} – ${when(day(b)) || "end"}` : "all data";
+}
+
+// line icons in place of words (the title says what each means), as on Paper > Overview
+const ICONS = {
+  mac: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
+  runs: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  cmp: '<path d="M7 7h12l-3-3M17 17H5l3 3"/>',
+  cyc: '<path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/>',
+  legs: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/>',
+  log: '<path d="M6 3h9l4 4v14H6z"/><path d="M9 11h7M9 15h7M9 19h4"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  set: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  fig: '<path d="M4 19h16"/><path d="M7 16V10M12 16V6M17 16v-4"/>',
+  warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
+  cal: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  win: '<path d="M5 13l4 4L19 7"/>',
+  pf: '<path d="M12 3v18M7 8h7a3 3 0 0 1 0 6H8"/>',
+  week: '<path d="M4 7l6 6 4-4 6 6"/>',
+  water: '<path d="M3 15c3-3 6 3 9 0s6 3 9 0"/><path d="M12 3v8"/>',
+  ret: '<path d="M4 18L10 11l4 4 6-8"/><path d="M15 7h5v5"/>',
+  chev: '<path d="M9 6l6 6-6 6"/>'};
+const icon = (k, ttl) => `<svg class="ic ${k}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${esc(ttl)}"><title>${esc(ttl)}</title>${ICONS[k]}</svg>`;
+for (const [id, k, tl] of [["macIc", "mac", "Backtests run on the Mac"], ["runsIc", "runs", "Runs"], ["cmpIc", "cmp", "Compare"], ["cycIc", "cyc", "Cycles"],
+                           ["btnLegs", "legs", "Show legs"], ["btnLog", "log", "Show log"], ["btnDelete", "trash", "Delete run"], ["setIc", "set", "Settings"], ["figIc", "fig", "All figures"]])
+  $(id).innerHTML = icon(k, tl);
+document.querySelectorAll("details.sec .chev").forEach(c => c.innerHTML = icon("chev", "Show or hide"));
+
+async function getJSON(url, opt) {
+  const r = await fetch(url, Object.assign({credentials: "same-origin"}, opt || {}));
+  if (r.status === 401) { location.href = "/signin?next=/backtests"; throw new Error("signed out"); }
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+const KIND = j => j.optimise ? "Find best settings" : j.kind === "sweep" ? (j.folds ? "Walk-forward sweep" : "Sweep") : "Backtest";
+async function loadSweeps() {
+  let j;
+  try { j = await getJSON("/api/backtest-runner/finished"); } catch (e) { return; }
+  const list = j.jobs || [];
+  $("swCard").classList.toggle("hide", !list.length);
+  if (list.length) { $("main").classList.remove("hide"); $("emptyBox").classList.add("hide"); }
+  $("swCnt").textContent = list.length || "";
+  $("sweeps").innerHTML = list.map(x => {
+    const best = x.best, failed = x.status === "failed";
+    return `<div class="sw" data-open="${x.kind === "sweep" ? esc(x.id) : ""}">
+      <span><span class="nm">${esc(KIND(x))} · ${esc(title(x.strategy))}</span>
+        <small>${esc(x.dataset)} · ${esc(period({from: x.from, to: x.to}))}${x.target === "mac" ? " · Mac" : ""}${x.picks != null ? ` · ${x.picks} pick${x.picks === 1 ? "" : "s"}` : x.total ? ` · ${x.total} combinations` : ""}</small>
+        ${failed ? `<small class="down">${esc(x.message || "Failed")}</small>` : ""}</span>
+      <span class="${failed ? "down" : best != null ? cls(best) : ""}">${failed ? "failed" : best != null ? mag(best) : ""}</span>
+      <span><button class="del" type="button" data-job="${esc(x.id)}" title="Delete">${icon("trash", "Delete")}</button></span></div>`;
+  }).join("");
+}
+$("sweeps").addEventListener("click", e => {
+  const del = e.target.closest("button[data-job]");
+  if (del) {
+    e.stopPropagation();
+    armed(del, async () => { await getJSON(`/api/backtest-runner/job/${encodeURIComponent(del.dataset.job)}/delete`, {method: "POST"}); loadSweeps(); });
+    return;
+  }
+  const row = e.target.closest(".sw[data-open]");
+  if (row && row.dataset.open) location.href = "/backtests/sweep?job=" + encodeURIComponent(row.dataset.open);
+});
+
+async function loadList(selectName) {
+  loadSweeps();
+  const j = await getJSON("/api/backtests");
+  runs = j.runs;
+  $("status").textContent = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
+  $("runCnt").textContent = runs.length || "";
+  $("emptyBox").classList.toggle("hide", runs.length > 0);
+  $("main").classList.toggle("hide", runs.length === 0);
+  compare = compare.filter(n => runs.some(r => r.name === n));
+  renderList();
+  if (!runs.length) return;
+  const want = selectName || new URLSearchParams(location.search).get("run");
+  await select(runs.some(r => r.name === want) ? want : runs[0].name);
+}
+
+function renderList() {
+  const hd = `<div class="rr hd"><span></span><span>Strategy</span><span class="w">Period</span><span>Net</span><span class="w">Ret / DD</span><span class="w">Worst week</span><span>Cycles</span><span></span></div>`;
+  $("runs").innerHTML = hd + runs.map(r => {
+    const m = r.metrics || {}, sample = String(r.dataset || "").startsWith("SAMPLE");
+    return `<div class="rr${current && current.name === r.name ? " sel" : ""}" data-name="${esc(r.name)}">
+      <span><input type="checkbox" aria-label="Compare" title="Compare" ${compare.includes(r.name) ? "checked" : ""} data-cmp="${esc(r.name)}"></span>
+      <span><span class="nm"><span class="tx">${esc(title(r.strategy))}</span>${sample ? '<span class="tag" title="Synthetic sample data">SAMPLE</span>' : ""}</span><small>${esc(r.note || when(r.saved))}</small></span>
+      <span class="w"><small>${esc(period(r))}</small></span>
+      <span class="pv ${cls(m["Net P&L"])}">${mag(m["Net P&L"])}<small class="down" title="Max drawdown">▼ ${mag(m["Max drawdown"])}</small></span>
+      <span class="w">${m["Return / drawdown"] ?? "–"}</span>
+      <span class="w ${cls(m["Worst week"])}">${mag(m["Worst week"])}</span>
+      <span>${m["Cycles"] ?? "–"}<small>${m["Win rate %"] != null ? m["Win rate %"] + "% won" : ""}</small></span>
+      <span><button class="del" type="button" data-del="${esc(r.name)}" title="Delete this result">${icon("trash", "Delete")}</button></span></div>`;
+  }).join("");
+}
+
+// delete from the list: the first tap arms the bin (red), a second tap within 4 s deletes
+function armed(b, go) {
+  if (!b.classList.contains("armed")) {
+    document.querySelectorAll(".del.armed").forEach(x => x.classList.remove("armed"));
+    b.classList.add("armed"); b.title = "Tap again to delete";
+    setTimeout(() => b.classList.remove("armed"), 4000);
+    return;
+  }
+  b.disabled = true; go();
+}
+$("runs").addEventListener("click", e => {
+  const del = e.target.closest("button[data-del]");
+  if (del) {
+    e.stopPropagation();
+    armed(del, async () => {
+      const n = del.dataset.del;
+      await getJSON(`/api/backtests/${encodeURIComponent(n)}/delete`, {method: "POST"});
+      delete cache[n]; compare = compare.filter(x => x !== n);
+      if (current && current.name === n) { current = null; history.replaceState(null, "", "/backtests"); }
+      await loadList();
+    });
+    return;
+  }
+  const box = e.target.closest("input[data-cmp]");
+  if (box) {
+    const n = box.dataset.cmp;
+    if (box.checked) {
+      if (compare.length >= 3) { box.checked = false; alertNote("Compare up to 3 runs at a time."); return; }
+      compare.push(n);
+    } else compare = compare.filter(x => x !== n);
+    drawCharts();
+    return;
+  }
+  const row = e.target.closest(".rr[data-name]");
+  if (row) select(row.dataset.name);
+});
+
+function alertNote(t) { $("chartNote").textContent = t; }
+
+async function fetchRun(name) {
+  if (!cache[name]) cache[name] = await getJSON("/api/backtests/" + encodeURIComponent(name));
+  return cache[name];
+}
+
+async function select(name) {
+  current = await fetchRun(name);
+  history.replaceState(null, "", "/backtests?run=" + encodeURIComponent(name));
+  renderList();
+  renderDetail();
+  await drawCharts();
+}
+
+function renderDetail() {
+  const d = current, m = d.meta.metrics || {}, cap = d.capital;
+  $("dName").textContent = title(d.meta.strategy);
+  $("dSub").textContent = [d.meta.note, period(d.meta)].filter(Boolean).join(" · ");
+  $("cNet").innerHTML = `<span class="${cls(m["Net P&L"])}">${lakh(m["Net P&L"])}</span>`;
+  $("cNetSub").innerHTML = m["Return on capital %"] != null ? `<span class="${cls(m["Return on capital %"])}">${Math.abs(m["Return on capital %"])}%</span> of ${lakh(cap)}` : "";
+  $("cDD").textContent = lakh(m["Max drawdown"]);
+  $("cDDSub").textContent = m["Max drawdown %"] != null ? Math.abs(m["Max drawdown %"]) + "%" : "";
+  $("cRD").textContent = m["Return / drawdown"] ?? "–";
+  $("cRDSub").textContent = "";
+  const chip = (k, ttl, v, c) => v == null || v === "–" ? "" : `<span class="chip" title="${esc(ttl)}">${icon(k, ttl)}<b class="${c || ""}">${v}</b></span>`;
+  $("chips").innerHTML =
+    chip("cyc", "Cycles", m["Cycles"]) +
+    chip("win", "Cycles won", m["Win rate %"] != null ? m["Win rate %"] + "%" : null) +
+    chip("pf", "Profit factor", m["Profit factor"]) +
+    chip("ret", "Annualised return", m["Annualised return %"] != null ? Math.abs(m["Annualised return %"]) + "%/yr" : null, cls(m["Annualised return %"])) +
+    chip("week", "Worst week", m["Worst week"] != null ? mag(m["Worst week"]) : null, cls(m["Worst week"])) +
+    chip("water", "Longest time under the peak (days)", m["Longest drawdown (days)"] != null ? m["Longest drawdown (days)"] + "d" : null);
+
+  const real = String(m["Fills on real option prices"] || "");
+  const sample = String(d.meta.dataset || "").startsWith("SAMPLE");
+  const ban = $("banner");
+  const warn = [];
+  if (sample) warn.push("<b>Synthetic sample data</b>: these numbers say nothing about the real market.");
+  if (real && real !== "100%") warn.push(`<b>${esc(real)}</b> of fills on real option prices; the rest are modelled (Black-Scholes on India VIX, no skew), so treat it as indicative${d.meta.strategy === "blaze_butterfly" ? ", especially for the butterfly's far put" : ""}.`);
+  ban.innerHTML = warn.map(w => icon("warn", "Caution") + w).join("<br>");
+  ban.classList.toggle("hide", !warn.length);
+
+  const p = d.meta.params || {};
+  $("params").innerHTML = Object.entries(p).map(([k, v]) => `<dt>${esc(k.replace(/_/g, " "))}</dt><dd>${esc(v)}</dd>`).join("") ||
+    "<dt>Defaults</dt><dd></dd>";
+  const s = d.settings || {};
+  $("runInfo").innerHTML =
+    `${esc(d.meta.dataset)} · slippage ${esc(s.slippage_pct)}% · stops on ${s.intrabar === "close" ? "bar closes" : "bar open/high/low/close"}<br>` +
+    `code ${esc(d.meta.code)} · data ${esc(((d.meta.data || {}).sha256 || "").slice(0, 12))} · saved ${esc(when(d.meta.saved))}`;
+  const skip = new Set(["Net P&L", "Max drawdown", "Return / drawdown"]);
+  $("metrics").innerHTML = Object.entries(m).filter(([k]) => !skip.has(k)).map(([k, v]) => {
+    const money = ["Charges paid", "Avg win", "Avg loss", "Best cycle", "Worst cycle", "Worst week"].includes(k);
+    const colour = money && k !== "Charges paid" ? cls(v) : "";
+    return `<dt>${esc(k)}</dt><dd class="${colour}">${money ? (colour ? mag(v) : inr(v)) : esc(v ?? "–")}</dd>`;
+  }).join("");
+
+  const cyc = d.cycles || [];
+  $("cycCnt").textContent = cyc.length || "";
+  drawCycles();
+  calYear = null; drawCal(); drawBreakdown();
+  $("legsBox").classList.add("hide");
+  $("logBox").classList.add("hide");
+  $("btnLegs").classList.remove("on"); $("btnLog").classList.remove("on");
+}
+
+// ---- P&L calendar: daily P&L = change in the closing value from one day to the next
+let calYear = null;
+function dailyPnl(run) {
+  let prev = run.capital || 0;
+  return (run.equity || []).map(r => { const c = num(r.equity); const p = c - prev; prev = c; return [day(r.date), p]; });
+}
+function drawCal() {
+  const days = dailyPnl(current), years = [...new Set(days.map(d => d[0].slice(0, 4)))].sort();
+  if (!days.length) { $("calYears").innerHTML = ""; $("calMonths").innerHTML = '<div class="note">No daily values.</div>'; return; }
+  if (!calYear || !years.includes(calYear)) calYear = years[years.length - 1];
+  $("calYears").innerHTML = years.map(y => `<button type="button" data-y="${y}" class="${y === calYear ? "on" : ""}">${y}</button>`).join("");
+  const inYear = days.filter(d => d[0].startsWith(calYear) && Math.abs(d[1]) > 0.5);
+  const big = Math.max(1, ...inYear.map(d => Math.abs(d[1])));
+  const win = inYear.filter(d => d[1] > 0).length;
+  $("calCnt").textContent = inYear.length ? `${win}/${inYear.length} days up` : "";
+  const map = Object.fromEntries(days.map(d => [d[0], d[1]]));
+  let html = "";
+  for (let m = 0; m < 12; m++) {
+    const first = new Date(+calYear, m, 1), last = new Date(+calYear, m + 1, 0);
+    let cells = "", tot = 0, any = false;
+    const lead = (first.getDay() + 6) % 7;                         // Monday = 0
+    for (let i = 0; i < (lead >= 5 ? 0 : lead); i++) cells += "<i style=\"visibility:hidden\"></i>";
+    for (let dd = 1; dd <= last.getDate(); dd++) {
+      const dt = new Date(+calYear, m, dd), wd = dt.getDay();
+      if (wd === 0 || wd === 6) continue;
+      const key = `${calYear}-${String(m + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+      const v = map[key];
+      if (v === undefined || Math.abs(v) <= 0.5) { cells += `<i title="${key}"></i>`; continue; }
+      any = true; tot += v;
+      const a = (0.25 + 0.75 * Math.min(1, Math.abs(v) / big)).toFixed(2);
+      cells += `<b data-d="${key}" title="${key} ${inr(v)}" style="background:${css(v > 0 ? "--up" : "--down")};opacity:${a}"></b>`;
+    }
+    if (!any && !Object.keys(map).some(k => k.startsWith(`${calYear}-${String(m + 1).padStart(2, "0")}`))) continue;
+    const name = first.toLocaleDateString("en-IN", {month: "short"});
+    html += `<div class="mon"><div class="mt"><span>${name}</span><span class="${cls(tot)}">${any ? mag(tot) : ""}</span></div><div class="mgrid">${cells}</div></div>`;
+  }
+  $("calMonths").innerHTML = html;
+  $("calDay").innerHTML = "";
+}
+$("calYears").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { calYear = b.dataset.y; drawCal(); } });
+$("calMonths").addEventListener("click", e => {
+  const b = e.target.closest("b[data-d]"); if (!b) return;
+  document.querySelectorAll(".mgrid b.sel").forEach(x => x.classList.remove("sel")); b.classList.add("sel");
+  const d = b.dataset.d, v = dailyPnl(current).find(x => x[0] === d)?.[1];
+  const cyc = (current.cycles || []).filter(c => day(c.exit_time) === d);
+  $("calDay").innerHTML = `<b>${esc(when(d))}</b> · <span class="${cls(v)}">${mag(v)}</span>` +
+    (cyc.length ? cyc.map(c => `<div>${esc(span2(c.entry_time, c.exit_time))} · ${esc(c.exit_reason || "")} · <span class="${cls(c.net_pnl)}">${mag(c.net_pnl)}</span></div>`).join("")
+                : '<div class="note">No cycle closed this day (open positions moved in value).</div>');
+});
+
+let bdBy = "year";
+const BD_TITLE = {year: "Year", month: "Month", weekday: "Weekday", reason: "Exit reason"};
+function drawBreakdown() {
+  const cyc = (current && current.cycles) || [], WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const key = c => bdBy === "year" ? day(c.exit_time).slice(0, 4) : bdBy === "month" ? day(c.exit_time).slice(0, 7)
+    : bdBy === "weekday" ? WD[new Date(day(c.entry_time) + "T00:00").getDay()] : (c.exit_reason || "–").replace(/[\d.,]+/g, "#").slice(0, 40);
+  const g = {};
+  for (const c of cyc) { const k = key(c), v = num(c.net_pnl) || 0; (g[k] = g[k] || {n: 0, w: 0, net: 0}); g[k].n++; g[k].net += v; if (v > 0) g[k].w++; }
+  let keys = Object.keys(g);
+  keys = bdBy === "weekday" ? WD.filter(k => g[k]) : bdBy === "reason" ? keys.sort((a, b) => g[b].n - g[a].n) : keys.sort();
+  $("bd").innerHTML = keys.length ? `<thead><tr><th class="l">${BD_TITLE[bdBy]}</th><th>Cycles</th><th>Win %</th><th>Net</th><th>Per cycle</th></tr></thead><tbody>` +
+    keys.map(k => { const r = g[k]; return `<tr><td class="l">${esc(k)}</td><td>${r.n}</td><td>${Math.round(r.w / r.n * 100)}%</td><td class="${cls(r.net)}">${mag(r.net)}</td><td class="${cls(r.net)}">${mag(r.net / r.n)}</td></tr>`; }).join("") + "</tbody>"
+    : '<tbody><tr><td class="l">No cycles.</td></tr></tbody>';
+  document.querySelectorAll("#bdBy button").forEach(b => b.classList.toggle("on", b.dataset.b === bdBy));
+}
+$("bdBy").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { bdBy = b.dataset.b; drawBreakdown(); } });
+
+let allCycles = false;
+function drawCycles() {
+  const cyc = (current && current.cycles) || [], show = allCycles ? cyc : cyc.slice(0, 10);
+  $("cycles").innerHTML = show.map((c, i) =>
+    `<div class="cr" role="button" tabindex="0" aria-expanded="false" data-i="${i}" title="Show this cycle's trades"><span class="no">${i + 1}</span>
+      <span><b>${esc(span2(c.entry_time, c.exit_time))}</b><small>${esc(c.exit_reason || "")}${c.legs ? " · " + c.legs + " legs" : ""}${num(c.costs) ? " · charges " + inr(c.costs) : ""}${num(c.worst_move) ? ` · <span class="down">↓${mag(c.worst_move)}</span>` : ""}${num(c.best_move) ? ` <span class="up">↑${mag(c.best_move)}</span>` : ""}</small></span>
+      <span class="nv"><span class="${cls(c.net_pnl)}">${mag(c.net_pnl)}</span><span class="chev2">${CHEV}</span></span></div>`).join("") ||
+    '<div class="note">No completed cycles.</div>';
+  if (cyc.length > 10) $("cycles").innerHTML += `<button class="ibtn" id="moreCyc" type="button" style="margin-top:8px;width:100%">${allCycles ? "Show first 10" : "Show all " + cyc.length}</button>`;
+}
+const CHEV = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+const cycCache = {};
+// "NIFTY 06 Jan 26 23200 CE" -> "23200 CE · 06 Jan"
+const shortC = c => { const m = String(c).match(/(\d{2} \w{3}) \d{2} (\d+) (CE|PE)$/); return m ? `${m[2]} ${m[3]} · ${m[1]}` : String(c); };
+const hm = t => { const m = String(t || "").match(/(\d{2}:\d{2})/); return m ? m[1] : ""; };
+async function toggleCycle(row) {
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains("cx")) { next.remove(); row.classList.remove("open"); row.setAttribute("aria-expanded", "false"); return; }
+  const c = current.cycles[+row.dataset.i], key = current.name + "|" + c.group;
+  const box = document.createElement("div");
+  box.className = "cx"; box.textContent = "Loading…";
+  row.after(box); row.classList.add("open"); row.setAttribute("aria-expanded", "true");
+  try {
+    const j = cycCache[key] || (cycCache[key] = await getJSON(`/api/backtests/${encodeURIComponent(current.name)}?cycle=${encodeURIComponent(c.group)}`));
+    const fills = j.fills || [];
+    const why = (t) => { const f = fills.find(f => f.contract === t.contract && String(f.time) === String(t.entry_time)); return f ? f.reason : ""; };
+    box.innerHTML = (j.trades || []).map(t => {
+      const inWhy = why(t);
+      return `<div class="lg"><span><b>${esc(shortC(t.contract))}</b><span class="tag">${t.side === "LONG" ? "Bought" : "Sold"} ${t.qty ?? ""}</span><br>
+        ${hm(t.entry_time)} @ ${num(t.entry_price)?.toFixed(2) ?? "–"} → ${hm(t.exit_time)} @ ${num(t.exit_price)?.toFixed(2) ?? "–"}</span>
+        <span class="pn ${cls(t.net_pnl)}">${mag(t.net_pnl)}</span>
+        <small>${inWhy ? "In: " + esc(inWhy) + " · " : ""}Out: ${esc(t.reason || "")}${num(t.costs) ? " · charges " + inr(t.costs) : ""}</small></div>`;
+    }).join("") || '<div class="note">No trades recorded for this cycle.</div>';
+  } catch (e) { box.textContent = "Could not load the trades: " + e.message; }
+}
+$("cycles").addEventListener("click", e => {
+  if (e.target.closest("#moreCyc")) { allCycles = !allCycles; drawCycles(); return; }
+  const row = e.target.closest(".cr"); if (row) toggleCycle(row);
+});
+$("cycles").addEventListener("keydown", e => {
+  const row = e.target.closest(".cr"); if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleCycle(row); }
+});
+
+function series(run) {
+  const cap = run.capital || 0;
+  let peak = -Infinity;
+  return (run.equity || []).map(r => {
+    const close = num(r.equity), low = num(r.low) ?? close;
+    peak = Math.max(peak, close);
+    return {date: day(r.date), pnl: close - cap, dd: Math.min(low, close) - peak};
+  });
+}
+
+async function drawCharts() {
+  const names = compare.length ? compare.slice() : [current.name];
+  const data = await Promise.all(names.map(fetchRun));
+  const dates = [...new Set(data.flatMap(series).map(p => p.date))].sort();
+  const many = data.length > 1;
+  const sets = data.map((run, i) => {
+    const map = Object.fromEntries(series(run).map(p => [p.date, p]));
+    const color = many ? css(SERIES[i]) : css("--accent");
+    const label = `${title(run.meta.strategy)} · ${run.meta.note || when(run.meta.saved)}`;
+    return {label, color, pnl: dates.map(d => map[d] ? map[d].pnl : null), dd: dates.map(d => map[d] ? map[d].dd : null)};
+  });
+  document.getElementById("legend").innerHTML = many ? sets.map(s => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("") : `<span><i style="background:${css("--accent")}"></i>P&amp;L after charges</span>`;
+  document.getElementById("chartNote").textContent = "";
+  const grid = css("--grid"), muted = css("--muted");
+  const base = (money) => ({
+    responsive: true, maintainAspectRatio: false, animation: false, spanGaps: true,
+    interaction: {mode: "index", intersect: false},
+    plugins: {legend: {display: false}, tooltip: {callbacks: {label: c => ` ${many ? c.dataset.label + ": " : ""}${inr(c.parsed.y, true)}`}}},
+    scales: {
+      x: {grid: {display: false}, ticks: {color: muted, maxTicksLimit: window.innerWidth < 600 ? 4 : 7, maxRotation: 0, autoSkipPadding: 12, callback(v) { return when(this.getLabelForValue(v)); }}},
+      y: {grid: {color: grid}, border: {display: false}, ticks: {color: muted, maxTicksLimit: 5, callback: v => inr(v)}}
+    }
+  });
+  const mk = (id, key, fill) => {
+    if (charts[id]) charts[id].destroy();
+    charts[id] = new Chart(document.getElementById(id), {
+      type: "line",
+      data: {labels: dates, datasets: sets.map(s => ({label: s.label, data: s[key], borderColor: key === "dd" && !many ? css("--down") : s.color,
+        backgroundColor: (key === "dd" && !many ? css("--down") : s.color) + "22", borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+        fill: fill && !many ? "origin" : false, tension: 0}))},
+      options: base()
+    });
+  };
+  mk("pnl", "pnl", false);
+  mk("dd", "dd", true);
+}
+
+$("btnLegs").addEventListener("click", async () => {
+  const box = $("legsBox"), b = $("btnLegs");
+  if (!box.classList.contains("hide")) { box.classList.add("hide"); b.classList.remove("on"); return; }
+  const j = await getJSON(`/api/backtests/${encodeURIComponent(current.name)}?trades=1`);
+  $("legs").innerHTML = (j.trades || []).map(t =>
+    `<tr><td class="l">${esc(String(t.group).split(" | ")[0])}</td><td class="l">${esc(t.contract)}</td><td class="l">${esc(t.side)}</td><td>${t.qty ?? ""}</td>
+     <td>${num(t.entry_price)?.toFixed(2) ?? ""}</td><td>${num(t.exit_price)?.toFixed(2) ?? ""}</td><td class="${cls(t.net_pnl)}">${mag(t.net_pnl)}</td><td class="l">${esc(t.reason)}</td></tr>`).join("");
+  box.classList.remove("hide"); b.classList.add("on");
+});
+$("btnLog").addEventListener("click", async () => {
+  const box = $("logBox"), b = $("btnLog");
+  if (!box.classList.contains("hide")) { box.classList.add("hide"); b.classList.remove("on"); return; }
+  const j = await getJSON(`/api/backtests/${encodeURIComponent(current.name)}?log=1`);
+  $("log").textContent = (j.log || []).join("\n") || "No log.";
+  box.classList.remove("hide"); b.classList.add("on");
+});
+$("btnDelete").addEventListener("click", async () => {
+  const b = $("btnDelete");
+  if (b.dataset.armed !== current.name) {   // first tap arms it, a second tap within 4 s deletes
+    b.dataset.armed = current.name; b.classList.add("armed"); b.innerHTML = icon("trash", "Tap again to delete") + "<span>Delete?</span>";
+    setTimeout(() => { if (b.dataset.armed) { b.dataset.armed = ""; b.classList.remove("armed"); b.innerHTML = icon("trash", "Delete run"); } }, 4000);
+    return;
+  }
+  b.dataset.armed = ""; b.classList.remove("armed"); b.innerHTML = icon("trash", "Delete run");
+  await getJSON(`/api/backtests/${encodeURIComponent(current.name)}/delete`, {method: "POST"});
+  delete cache[current.name];
+  compare = compare.filter(n => n !== current.name);
+  current = null;
+  history.replaceState(null, "", "/backtests");
+  await loadList();
+});
+
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => current && drawCharts());
+loadList().catch(e => { $("status").textContent = "Could not load: " + e.message; });
+</script>
+</body>
+</html>

@@ -1,0 +1,90 @@
+# ---------------------------------------------------------------- paper trading (Algo page)
+# The trader-paper service (paper_engine.py) does the trading; this page only reads its
+# database and passes Pause / Resume / Square-off requests to it. Nothing here places orders.
+PAPER_DB = BASE / "data" / "paper.db"
+
+
+def paper_db():
+    con = sqlite3.connect(PAPER_DB, timeout=5)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def next_entry_day(eng_mod, settings, rt):
+    """The next date and window the strategy will try to enter."""
+    cal = eng_mod.Calendar(settings["holidays"])
+    t = now_ist()
+    d = t.date()
+    for _ in range(21):
+        ewd = 3 if d.isoformat() <= settings["era_cutover"] else 1
+        nxt = cal.next_trading_day(d)
+        last = (nxt - d).days >= 8 - d.isoweekday() if d.weekday() < 5 else True
+        future = d > t.date() or (t.hour * 100 + t.minute) < settings["entry_end"]
+        if d.isoweekday() == ewd and cal.is_trading_day(d) and not last and future \
+                and rt.get("entered_date") != d.isoformat() and rt.get("skip_date") != d.isoformat():
+            return d.strftime("%a %d %b %Y")
+        d += timedelta(days=1)
+    return ""
+
+
+@app.route("/algo")
+def algo_page():
+    return render_template("algo.html")
+
+
+@app.route("/api/algo")
+def api_algo():
+    if not PAPER_DB.exists():
+        return jsonify(installed=False)
+    import paper_engine as pe  # beside this file
+    settings = pe.load_settings()
+    with paper_db() as con:
+        rt = dict(pe.RUNTIME_DEFAULTS)
+        rt.update({r["key"]: json.loads(r["value"]) for r in con.execute("SELECT key, value FROM runtime")})
+        runs = [dict(r) for r in con.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 104")]
+        current = runs[0] if runs and runs[0]["status"] == "open" else None
+        last = runs[0] if runs else None
+        legs = [dict(r) for r in con.execute("SELECT * FROM legs WHERE run_id=? ORDER BY set_no, leg_no",
+                                             (last["id"] if last else -1,))]
+        mtm = [dict(r) for r in con.execute("SELECT ts, pnl, spot FROM mtm WHERE run_id=? ORDER BY ts",
+                                            (last["id"] if last else -1,))]
+        events = [dict(r) for r in con.execute("SELECT ts, level, msg FROM events ORDER BY id DESC LIMIT 60")]
+        skips = con.execute("SELECT COUNT(*) FROM events WHERE level='skip'").fetchone()[0]
+        pending = [r["cmd"] for r in con.execute("SELECT cmd FROM commands WHERE done IN (0, 2)")]
+        last_skip = con.execute("SELECT msg FROM events WHERE level='skip' ORDER BY id DESC LIMIT 1").fetchone()
+    today = now_ist().date()
+    week_start = (today - timedelta(days=today.weekday())).isoformat()
+    skip_note = last_skip["msg"].replace("Week skipped: ", "") if last_skip and rt["skip_date"] >= week_start else ""
+    for x in legs:
+        sign = 1 if x["side"] == "B" else -1
+        px = x["exit_px"] if x["status"] == "closed" else x["ltp"]
+        x["pnl"] = sign * ((px or 0) - x["entry_px"]) * x["qty"]
+    closed = [r for r in runs if r["status"] == "closed"]
+    hb_age = None
+    if rt.get("heartbeat"):
+        try:
+            hb_age = (now_ist() - datetime.fromisoformat(rt["heartbeat"])).total_seconds()
+        except ValueError:
+            pass
+    keep = ("margin_per_unit", "multiplier", "permit_mode", "permit_date", "entry_start", "entry_end",
+            "short_cutoff", "exit_time", "credit_cap_pct", "debit_cap_pct", "target_pct", "stop_pct")
+    return jsonify(
+        installed=True, strategy=pe.STRATEGY, runtime=rt, heartbeat_age=hb_age,
+        settings={k: settings[k] for k in keep}, current=current, last=last, legs=legs, mtm=mtm,
+        runs=runs, events=events, pending=pending, skip_note=skip_note, next_entry=next_entry_day(pe, settings, rt),
+        stats={"runs": len(closed), "wins": sum(1 for r in closed if (r["pnl"] or 0) > 0),
+               "total": sum(r["pnl"] or 0 for r in closed), "skips": skips})
+
+
+@app.route("/api/algo/command", methods=["POST"])
+def api_algo_command():
+    cmd = (request.get_json(silent=True) or {}).get("cmd")
+    if cmd not in ("pause", "resume", "squareoff"):
+        return jsonify(error="unknown command"), 400
+    if not PAPER_DB.exists():
+        return jsonify(error="the paper engine has not run yet"), 400
+    with paper_db() as con:
+        con.execute("INSERT INTO commands(ts, cmd) VALUES(?, ?)", (now_ist().strftime("%Y-%m-%d %H:%M:%S"), cmd))
+    return jsonify(ok=True)
+
+

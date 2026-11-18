@@ -1,0 +1,21 @@
+#!/bin/bash
+# After ibkr-login: close the screen tunnel, restart the IBKR sync and check that it reads your holdings.
+# the server and key saved by the Mac launchers (~/.algo-trading/server.env), unless given here
+CONF="${ALGO_SERVER_CONF:-$HOME/.algo-trading/server.env}"; [ -f "$CONF" ] && . "$CONF"
+KEY="${IBKR_SERVER_KEY:-${ALGO_KEY:-}}"
+HOST="${IBKR_SERVER:-${ALGO_HOST:-}}"
+[ -n "$HOST" ] || { echo "No server set yet: open deploy/update-server.command once (it asks), or put ALGO_HOST=\"ubuntu@<address>\" in $CONF"; exit 1; }
+SOCK="$HOME/.ssh/ibkr-vnc.sock"
+ssh -S "$SOCK" -O exit "$HOST" 2>/dev/null && echo "Closed the screen tunnel."
+printf '' | pbcopy   # clear the screen password from the clipboard
+echo "Checking the IBKR sync (about 30 seconds)..."
+ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "$HOST" '
+  sudo systemctl restart ibkr-sync; sleep 25
+  out=$(sudo journalctl -u ibkr-sync --since -40s --no-pager -o cat)
+  echo "$out" | tail -6
+  if echo "$out" | grep -qiE "sync failed|awaiting 2fa"; then
+    echo; echo "Still not logged in. Run ibkr-login again and finish the login on the gateway screen."
+  else
+    echo; echo "OK: the US stocks page will show fresh holdings within a minute."
+  fi
+'

@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>US stocks</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#6b7280;--line:#e5e7eb;--up:#0a8f5b;--down:#d1373f;--accent:#2f6fed}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#e8eaee;--muted:#8b93a1;--line:#272b35;--up:#34c98a;--down:#f0626a;--accent:#6c9bff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+h1{font-size:20px;margin:0}
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.status a{color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
+.dot.live{background:var(--up)}.dot.bad{background:var(--down)}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.card .big{font-size:22px;font-weight:650;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .sub{font-size:13px;margin-top:2px;color:var(--muted);font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.down{color:var(--down)}
+.vrow{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 20px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.vrow b{font-size:18px;color:var(--text);font-weight:650;margin-left:5px}
+.vrow b.up{color:var(--up)}.vrow b.down{color:var(--down)}
+.vrow small{margin-left:4px}.vrow .tot{margin-left:auto}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
+.vbar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--line);margin-top:10px}
+.vbar i{height:100%;transition:width .4s}
+#invBar{background:var(--accent)}#pnlBar.up{background:var(--up)}
+#pnlBar.down{background:repeating-linear-gradient(45deg,var(--down) 0 4px,color-mix(in srgb,var(--down) 45%,transparent) 4px 8px)}
+.tabs{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.tabs button,.cur button{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:6px;padding:4px 10px;font-size:13px;cursor:pointer}
+.tabs button.on,.cur button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.cur{display:inline-flex;gap:4px}
+.chartbox{height:230px;position:relative}
+.note{color:var(--muted);font-size:12px;margin-top:8px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:9px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;color:var(--muted);font-weight:600;cursor:pointer;user-select:none}
+td small{color:var(--muted);display:block;font-size:12px}
+.banner{background:var(--card);border:1px solid var(--down);border-radius:12px;padding:14px;margin-bottom:12px}
+.banner code{font-size:13px}
+.hide{display:none}.ph{display:none}
+@media (max-width:760px){.cards{grid-template-columns:repeat(2,1fr)}.card .big{font-size:19px}.opt{display:none}.ph{display:inline}.vrow b{font-size:15px}.vrow .tot{margin-left:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>US stocks <span style="font-size:13px;color:var(--muted);font-weight:500">IBKR</span></h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Loading…</span> ·
+      <span class="cur"><button id="cUSD" type="button">USD</button><button id="cINR" type="button">INR</button></span> ·
+      <a href="/">Portfolio</a> · <a href="/stock">Stock history</a> · <a href="/signout">Sign out</a></div>
+  </header>
+
+  <div class="banner hide" id="errBox"></div>
+
+  <div class="card">
+    <div class="vrow">
+      <span><span class="sw" style="background:var(--accent)"></span>Invested<b id="invested">–</b></span>
+      <span><span class="sw" id="pnlSw" style="background:var(--up)"></span>P&amp;L<b id="pnl">–</b><small id="pnlPct"></small></span>
+      <span class="tot">Holdings value<b id="value">–</b></span>
+    </div>
+    <div class="vbar"><i id="invBar" style="width:0"></i><i id="pnlBar" style="width:0"></i></div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="label">Day P&amp;L</div><div class="big" id="day">–</div><div class="sub" id="dayPct"></div></div>
+    <div class="card"><div class="label">Cash</div><div class="big" id="cash">–</div><div class="sub">uninvested</div></div>
+    <div class="card"><div class="label">Account value</div><div class="big" id="netliq">–</div><div class="sub">holdings + cash</div></div>
+    <div class="card"><div class="label">USD / INR</div><div class="big" id="fx">–</div><div class="sub">reference rate</div></div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div class="tabs"><button id="tToday" class="on">Today</button><button id="tDaily">Day P&amp;L by day</button><button id="tValue">Account value</button></div>
+    <div class="chartbox"><canvas id="chart"></canvas></div>
+    <div class="note" id="chartNote"></div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div class="scroll"><table>
+      <thead><tr>
+        <th data-k="symbol">Stock</th><th data-k="qty" class="opt">Qty</th><th data-k="avg_cost" class="opt">Avg cost</th><th data-k="price" class="opt">Price</th>
+        <th data-k="market_value">Value</th><th data-k="daily_pnl">Day P&amp;L</th><th data-k="unrealized_pnl">P&amp;L</th><th data-k="weight" class="opt">Weight</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="8" style="text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
+    </table></div>
+    <div class="note">Prices from IBKR. Updates every minute from 18:30 to 02:00 IST on US market days; INR figures use the latest reference rate.</div>
+  </div>
+</div>
+
+<script>
+let D = null, cur = 'USD', tab = 'today', sortK = 'market_value', sortDir = -1, chart = null, timer = null;
+try { cur = localStorage.getItem('usCur') || 'USD'; tab = localStorage.getItem('usTab') || 'today'; } catch (e) {}
+const $ = id => document.getElementById(id);
+const rate = () => (D && D.usd_inr) || 0;
+const conv = (x, fx) => cur === 'INR' ? x * (fx || rate()) : x;
+function money(x, fx) {
+  if (x === null || x === undefined || isNaN(x)) return '–';
+  const v = conv(Number(x), fx);
+  return cur === 'INR'
+    ? (v < 0 ? '-₹' : '₹') + Math.abs(v).toLocaleString('en-IN', {maximumFractionDigits: 0})
+    : (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+const signed = x => (x > 0 ? '+' : '') + money(x);
+const cls = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+const pct = (a, b) => b ? ((a / b) * 100).toFixed(2) + '%' : '';
+function setText(id, txt, c) { const el = $(id); el.textContent = txt; el.className = c === undefined ? el.className : c; }
+
+function render() {
+  if (!D) return;
+  $('cUSD').className = cur === 'USD' ? 'on' : ''; $('cINR').className = cur === 'INR' ? 'on' : '';
+  const s = D.summary || {}, pnl = D.value - D.invested;
+  setText('invested', money(D.invested));
+  setText('pnl', signed(pnl), cls(pnl)); setText('pnlPct', pct(pnl, D.invested));
+  $('pnlSw').style.background = pnl < 0 ? 'var(--down)' : 'var(--up)';
+  setText('value', money(D.value));
+  const tot = Math.max(D.invested, D.value) || 1;
+  $('invBar').style.width = (Math.min(D.invested, D.value) / tot * 100) + '%';
+  $('pnlBar').style.width = (Math.abs(pnl) / tot * 100) + '%'; $('pnlBar').className = pnl < 0 ? 'down' : 'up';
+  setText('day', s.daily_pnl == null ? '–' : signed(s.daily_pnl), 'big ' + cls(s.daily_pnl));
+  setText('dayPct', s.daily_pnl == null ? '' : pct(s.daily_pnl, D.value - s.daily_pnl) + ' of holdings');
+  setText('cash', money(s.cash)); setText('netliq', money(s.net_liquidation));
+  setText('fx', D.usd_inr ? '₹' + D.usd_inr.toFixed(2) : '–');
+
+  const rows = D.positions.map(p => Object.assign({}, p, {weight: D.value ? (p.market_value || 0) / D.value : 0}));
+  rows.sort((a, b) => { const x = a[sortK], y = b[sortK]; return (typeof x === 'string' ? x.localeCompare(y) : (x || 0) - (y || 0)) * sortDir; });
+  $('rows').innerHTML = rows.length ? rows.map(p => {
+    const cost = (p.qty || 0) * (p.avg_cost || 0);
+    return `<tr><td><b>${p.symbol}</b><small><span class="ph">${p.qty} sh</span><span class="opt">${p.exchange || ''}</span></small></td><td class="opt">${p.qty}</td>`
+      + `<td class="opt">${money(p.avg_cost)}</td><td class="opt">${money(p.price)}</td><td>${money(p.market_value)}</td>`
+      + `<td class="${cls(p.daily_pnl)}">${p.daily_pnl == null ? '–' : signed(p.daily_pnl)}</td>`
+      + `<td class="${cls(p.unrealized_pnl)}">${signed(p.unrealized_pnl)}<small>${pct(p.unrealized_pnl, cost)}</small></td>`
+      + `<td class="opt">${(p.weight * 100).toFixed(1)}%</td></tr>`;
+  }).join('') : '<tr><td colspan="8" style="text-align:center;color:var(--muted)">No US holdings</td></tr>';
+  drawChart();
+}
+
+function drawChart() {
+  ['tToday', 'tDaily', 'tValue'].forEach(id => $(id).className = id === {today: 'tToday', daily: 'tDaily', value: 'tValue'}[tab] ? 'on' : '');
+  let labels, vals, type = 'line', note = '';
+  if (tab === 'today') {
+    labels = D.intraday.map(r => r.t); vals = D.intraday.map(r => conv(r.daily_pnl, r.usd_inr));
+    note = labels.length ? 'Day P&L through the US session (IST)' : 'Fills in from 18:30 IST on US market days.';
+  } else if (tab === 'daily') {
+    const d = D.days.filter(r => r.daily_pnl != null).slice(-60);
+    labels = d.map(r => r.day.slice(5)); vals = d.map(r => conv(r.daily_pnl, r.usd_inr)); type = 'bar';
+    note = labels.length ? 'Closing day P&L for each US trading day' : 'Builds up one bar per trading day.';
+  } else {
+    const d = D.days.filter(r => r.net_liq != null);
+    labels = d.map(r => r.day.slice(5)); vals = d.map(r => conv(r.net_liq, r.usd_inr));
+    note = 'Account value (holdings + cash) at each day\'s last sync';
+  }
+  $('chartNote').textContent = note;
+  const css = getComputedStyle(document.documentElement), up = css.getPropertyValue('--up').trim(),
+        down = css.getPropertyValue('--down').trim(), acc = css.getPropertyValue('--accent').trim(),
+        grid = css.getPropertyValue('--line').trim(), muted = css.getPropertyValue('--muted').trim();
+  const color = tab === 'value' ? acc : (vals.length && vals[vals.length - 1] < 0 ? down : up);
+  if (chart) chart.destroy();
+  chart = new Chart($('chart'), {
+    type, data: {labels, datasets: [{data: vals, borderColor: color, borderWidth: type === 'bar' ? 0 : 2, pointRadius: 0, tension: .25,
+      backgroundColor: type === 'bar' ? vals.map(v => v < 0 ? down : up) : 'transparent'}]},
+    options: {maintainAspectRatio: false, animation: false, plugins: {legend: {display: false},
+      tooltip: {callbacks: {label: c => money(cur === 'INR' ? c.raw / rate() : c.raw)}}},
+      scales: {x: {grid: {display: false}, ticks: {color: muted, maxTicksLimit: 8}}, y: {grid: {color: grid}, ticks: {color: muted}}}}
+  });
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/us');
+    if (r.status === 401) { location.href = '/signin?next=/us'; return; }
+    const j = await r.json();
+    if (!j.ok) { $('errBox').textContent = j.error; $('errBox').classList.remove('hide'); $('status').textContent = 'No data'; return; }
+    D = j;
+    $('dot').className = 'dot ' + (j.stale ? 'bad' : j.in_window ? 'live' : '');
+    $('status').textContent = (j.in_window ? 'Updated ' : 'Market closed · last update ') + j.updated_ist;
+    if (j.stale) {
+      $('errBox').innerHTML = 'No update for ' + Math.round(j.age_min) + ' minutes. The IBKR gateway probably needs a login: on the Mac run <code>ibkr-login</code>, log in, then <code>ibkr-done</code>.';
+      $('errBox').classList.remove('hide');
+    } else $('errBox').classList.add('hide');
+    render();
+    clearInterval(timer); timer = setInterval(load, j.in_window ? 30000 : 600000);
+  } catch (e) { $('status').textContent = 'Could not reach the dashboard'; }
+}
+
+$('cUSD').onclick = () => { cur = 'USD'; try { localStorage.setItem('usCur', cur); } catch (e) {} render(); };
+$('cINR').onclick = () => { cur = 'INR'; try { localStorage.setItem('usCur', cur); } catch (e) {} render(); };
+[['tToday', 'today'], ['tDaily', 'daily'], ['tValue', 'value']].forEach(([id, t]) => $(id).onclick = () => {
+  tab = t; try { localStorage.setItem('usTab', t); } catch (e) {} if (D) drawChart(); });
+document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
+  const k = th.dataset.k; sortDir = sortK === k ? -sortDir : (k === 'symbol' ? 1 : -1); sortK = k; render(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+load();
+</script>
+</body>
+</html>

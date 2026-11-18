@@ -1,0 +1,36 @@
+{
+  "api_key": "PASTE_API_KEY",
+  "api_secret": "PASTE_API_SECRET",
+  "dashboard_user": "admin",
+  "dashboard_password": "change-me",
+  "port": 5000,
+  "token_file": "token.json",
+  "poll_seconds": 60,
+  "live_stream": true,
+  "snapshot_minutes": 1,
+
+  "gold_symbols": [],
+  "non_gold_symbols": [],
+
+  "alerts": {
+    "holding_day_move_pct": 3,
+    "portfolio_day_move_pct": 2,
+    "gold_allocation_band_pct": [5, 25],
+    "price_levels": [
+      {"symbol": "EXAMPLE", "above": null, "below": null}
+    ]
+  },
+
+  "email": {
+    "enabled": false,
+    "from": "you@gmail.com",
+    "app_password": "PASTE_GMAIL_APP_PASSWORD",
+    "to": "you@gmail.com"
+  },
+
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": ""
+  }
+}
