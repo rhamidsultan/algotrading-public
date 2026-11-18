@@ -702,7 +702,82 @@ def api_cycle_legs():
     trades = ((_json(x["state"]) or {}).get("broker") or {}).get("trades") or []
     legs = sorted((t for t in trades if str(t.get("group")) == cycle), key=lambda t: (str(t.get("exit_time")), str(t.get("contract"))))
     keys = ("contract", "side", "qty", "entry_time", "exit_time", "entry_price", "exit_price", "gross_pnl", "costs", "net_pnl", "reason")
-    return jsonify(cycle=cycle, legs=[{k: t.get(k) for k in keys} for t in legs])
+    edits = (((_json(x["state"]) or {}).get("broker") or {}).get("live") or {}).get("exit_edits") or {}
+    out = []
+    for t in legs:
+        leg = {k: t.get(k) for k in keys}
+        leg["key"] = _trade_key(t)
+        if leg["key"] in edits:
+            leg["edited_from"] = edits[leg["key"]].get("was")
+        out.append(leg)
+    return jsonify(cycle=cycle, legs=out)
+
+
+def _trade_key(t):
+    """A closed leg: contract, exit time and quantity (as algolab.live.LiveBroker.trade_key)."""
+    return f"{t.get('contract')}|{t.get('exit_time')}|{int(t.get('qty') or 0)}"
+
+
+def _edit_exit_saved(state, key, price, by, at):
+    """A stopped session's account (state.json): the exit price of one closed leg corrected, as
+    LiveBroker.edit_exit does in a running session. Returns the change in P&L; raises ValueError."""
+    b = state.get("broker") or {}
+    t = next((t for t in b.get("trades") or [] if _trade_key(t) == key), None)
+    if t is None:
+        raise ValueError("That closed leg was not found.")
+    old = float(t["exit_price"])
+    d = round((price - old) * int(t["qty"]) * (1 if t.get("side") == "LONG" else -1), 2)
+    t.update(exit_price=price, gross_pnl=round(float(t["gross_pnl"]) + d, 2), net_pnl=round(float(t["net_pnl"]) + d, 2))
+    b["realized_gross"] = float(b.get("realized_gross") or 0) + d
+    side = "SELL" if t.get("side") == "LONG" else "BUY"
+    for f in reversed(b.get("fills") or []):
+        if f.get("contract") == t["contract"] and f.get("time") == t["exit_time"] and f.get("side") == side and float(f.get("price") or 0) == old:
+            f["price"] = price
+            break
+    edits = b.setdefault("live", {}).setdefault("exit_edits", {})
+    rec = edits.get(key) or {"was": old}
+    rec.update(price=price, by=by, at=at)
+    edits[key] = rec
+    for k in ("net_realized", "equity"):
+        if isinstance(state.get(k), (int, float)):
+            state[k] = state[k] + d
+    state.setdefault("logs", []).append(f"{at}  Exit price of {t['contract']} edited: {old:.2f} -> {price:.2f} (booked first at "
+                                        f"{rec['was']:.2f}); P&L {'+' if d >= 0 else '-'}Rs {abs(d):,.0f}" + (f" by {by}" if by else ""))
+    return d
+
+
+@panel.route("/api/paper/exit_price", methods=["POST"])
+def api_exit_price():
+    """LIVE sessions (owner): correct the exit price of a closed leg, e.g. a square-off in Kite booked at an estimate.
+    P&L is recalculated; the first price booked is kept and shown. Running: the engine applies it within seconds."""
+    x = _target()
+    body = request.get_json(silent=True) or {}
+    if not x:
+        return jsonify(error="No such session."), 404
+    if _mode(x) != "live":
+        return jsonify(error="Exit prices can be edited on LIVE sessions."), 400
+    try:
+        price = round(float(body.get("price")), 2)
+    except (TypeError, ValueError):
+        return jsonify(error="Enter the exit price as a number."), 400
+    if not 0 < price < 100000:
+        return jsonify(error="Enter an exit price above 0."), 400
+    key = str(body.get("key") or "")
+    state = _json(x["state"]) or {}
+    if not any(_trade_key(t) == key for t in (state.get("broker") or {}).get("trades") or []):
+        return jsonify(error="That closed leg was not found."), 404
+    d = x["state"].parent
+    item = {"key": key, "price": price, "by": current_user() or owner_name(), "at": time.strftime("%Y-%m-%d %H:%M")}
+    if x["desired"].exists() or _age(x["beat"]) < 15:      # running: its engine owns the account
+        items = _json(d / "EDITS.json")
+        _write(d / "EDITS.json", (items if isinstance(items, list) else []) + [item])
+        return jsonify(ok=True, applied=False)
+    try:
+        delta = _edit_exit_saved(state, key, price, item["by"], item["at"])
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    _write(x["state"], state)
+    return jsonify(ok=True, applied=True, delta=delta)
 
 
 def _margins(visible=None):
@@ -2613,6 +2688,7 @@ function money(f, x, p, hidden) { return hidden ? `<span class="${cls(p)}">${pct
 
 // line icons in place of words (the title says what each means), as on Paper > Overview
 const ICONS = {
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   live: '<path d="M5 12a7 7 0 0 1 2-5M19 12a7 7 0 0 0-2-5M8.5 12a3.5 3.5 0 0 1 1-2.5M15.5 12a3.5 3.5 0 0 0-1-2.5"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><path d="M12 14v6"/>',
   closed: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   stale: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
@@ -5118,6 +5194,7 @@ details.cyc>summary .pc::after{content:" \25B8";color:var(--muted);font-weight:4
 details.cyc[open]>summary .pc::after{content:" \25BE"}
 details.cyc .legs{padding:0 2px 10px}
 table.lt td{vertical-align:top}table.lt .mt{white-space:nowrap}
+.exitEdit{background:none;border:0;padding:6px;margin:-6px -4px -6px 0;color:var(--muted,#8a8f98);cursor:pointer;min-width:32px;min-height:32px;vertical-align:middle}.exitEdit svg{width:15px;height:15px}.exitEdit:hover{color:var(--accent,#2f6fed)}
 .cnt{font-size:12px;color:var(--muted);font-weight:500;margin-left:4px}
 .emptybox{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;gap:10px;padding:18px 8px;color:var(--muted);text-align:center}
 .emptybox>.ic{width:30px;height:30px;color:var(--muted)}
@@ -5705,15 +5782,17 @@ function cycRow(c, sid) {
   const a = whenShort(c.entry.replace("T", " ")), b = whenShort(c.exit.replace("T", " ")), legs = cycLegs[sid + "|" + c.cycle];
   return `<details class="cyc" data-k="cyc:${esc(c.cycle)}" data-cycle="${esc(c.cycle)}"><summary class="prow"><div><div class="pc">${esc(b)}</div><div class="ps">from ${esc(a)} · ${esc(c.reason)}</div></div>
     <div class="pr"><div class="pv ${sign(c.net)}">${ainr(c.net)}</div><div class="ps">${c.legs} legs · charges ${inr(c.charges)}</div></div></summary>
-    <div class="legs">${legs ? legsTable(legs) : '<div class="empty">Loading the positions…</div>'}</div></details>`;
+    <div class="legs">${legs ? legsTable(legs, sid) : '<div class="empty">Loading the positions…</div>'}</div></details>`;
 }
-function legsTable(legs) {
+function legsTable(legs, sid) {
   if (!legs.length) return '<div class="empty">No positions stored for this cycle.</div>';
+  const edit = l => LIVEPAGE && sid && l.key ? `<button type="button" class="lnk exitEdit" data-sid="${esc(sid)}" data-key="${esc(l.key)}" data-px="${esc(l.exit_price)}" title="Edit the exit price (e.g. your Kite fill)">${icon("edit", "Edit")}</button>` : "";
+  const was = l => l.edited_from != null ? `<div class="mt" title="Edited by hand">edited · was ${Number(l.edited_from).toFixed(2)}</div>` : "";
   const px = v => v == null ? "–" : Number(v).toLocaleString("en-IN", {minimumFractionDigits: 2, maximumFractionDigits: 2});
   return `<div class="scroll"><table class="lt"><tr><th>Position</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net</th></tr>${legs.map(l =>
     `<tr><td>${chartLink(l.contract)}<div class="mt">${esc(l.reason || "")}</div></td><td>${l.side === "SHORT" ? "−" : "+"}${l.qty}</td>
       <td>${px(l.entry_price)}<div class="mt">${esc(mtime(String(l.entry_time).replace("T", " ").slice(0, 16)))}</div></td>
-      <td>${px(l.exit_price)}<div class="mt">${esc(mtime(String(l.exit_time).replace("T", " ").slice(0, 16)))}</div></td>
+      <td>${px(l.exit_price)} ${edit(l)}<div class="mt">${esc(mtime(String(l.exit_time).replace("T", " ").slice(0, 16)))}</div>${was(l)}</td>
       <td class="${sign(l.net_pnl)}">${ainr(l.net_pnl)}<div class="mt">charges ${inr(l.costs)}</div></td></tr>`).join("")}</table></div>`;
 }
 async function loadLegs(sid, cycle) {
@@ -5727,8 +5806,22 @@ async function loadLegs(sid, cycle) {
     cycLegs[k] = j.legs || [];
   } catch (e) { delete cycAsked[k]; cycLegs[k] = null; }
   document.querySelectorAll(`#detail .sess[data-id="${CSS.escape(sid)}"] details.cyc[data-cycle="${CSS.escape(cycle)}"] .legs`).forEach(el => {
-    el.innerHTML = cycLegs[k] ? legsTable(cycLegs[k]) : '<div class="empty">Could not load the positions. Close and open again to retry.</div>'; });
+    el.innerHTML = cycLegs[k] ? legsTable(cycLegs[k], sid) : '<div class="empty">Could not load the positions. Close and open again to retry.</div>'; });
 }
+
+// LIVE: correct the exit price of a closed leg (e.g. a square-off in Kite booked at an estimate)
+document.addEventListener("click", async e => {
+  const b = e.target.closest(".exitEdit"); if (!b) return;
+  e.preventDefault();
+  const v = prompt(`Exit price for this leg (now ${Number(b.dataset.px).toFixed(2)}). P&L is recalculated; the first price stays on record.`, b.dataset.px);
+  if (v == null || !String(v).trim()) return;
+  try {
+    const j = await post("/api/paper/exit_price", {id: b.dataset.sid, key: b.dataset.key, price: String(v).trim()});
+    flash(j.applied ? "Exit price saved." : "Exit price saved: the running session applies it in a few seconds.");
+    Object.keys(cycLegs).filter(k => k.startsWith(b.dataset.sid + "|")).forEach(k => { delete cycLegs[k]; delete cycAsked[k]; });
+    setTimeout(() => load(true), j.applied ? 300 : 4000);
+  } catch (err) { alert(err.message); }
+});
 
 // a contract label ("NIFTY 20 Oct 26 25000 CE") as a link to its live chart
 const MON = {Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06", Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"};

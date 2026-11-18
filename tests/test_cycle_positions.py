@@ -50,6 +50,6 @@ def test_open_cycle_lists_its_closed_legs_and_a_closed_cycle_its_positions(tmp_p
 
 def test_page_opens_a_cycle_to_its_positions():
     page = (Path(__file__).resolve().parents[1] / "deploy" / "portfolio_page" / "algolab_panel.py").read_text()
-    assert '<details class="cyc" data-k="cyc:' in page and "function legsTable(legs)" in page
+    assert '<details class="cyc" data-k="cyc:' in page and "function legsTable(legs, sid)" in page
     assert "/api/paper/cycle?id=" in page and "s.cycles.map(c => cycRow(c, x.id))" in page
     assert "Closed in this cycle" in page and "s.closed_legs.map(closedRow)" in page
