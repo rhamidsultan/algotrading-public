@@ -13,7 +13,7 @@ def test_ticks_endpoint(tmp_path, monkeypatch):
     rt.mkdir()
     mod = _panel(tmp_path, monkeypatch)
     sess = rt / "sessions"
-    for sid, mode, alive in (("straddle", "paper", True), ("fly", "shadow", True), ("old", "paper", False)):
+    for sid, mode, alive in (("straddle", "paper", True), ("fly", "live", True), ("old", "paper", False)):
         d = sess / sid
         d.mkdir(parents=True)
         (d / "desired.json").write_text(json.dumps({"strategy": "short_straddle", "mode": mode, "feed": "kite"}))

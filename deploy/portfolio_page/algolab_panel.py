@@ -1,7 +1,7 @@
 """Paper-trading and live-trading pages for the portfolio dashboard.
 
 /paper shows PAPER sessions (simulated orders). Several sessions can run the same strategy with
-different settings, each with its own account. /live shows SHADOW and LIVE sessions; at most one
+different settings, each with its own account. /live shows LIVE sessions; at most one
 LIVE session (real orders) runs at a time.
 
 The strategies run in the separate Algo Lab engine (its own background service, /opt/algolab).
@@ -417,6 +417,20 @@ def _payoff(s, points=161):
 SESS = RT / "sessions"
 
 
+def _drop_shadow(d):
+    """Shadow mode was removed (18 Nov 2026): a SHADOW session (it never sent an order) is stopped and its folder
+    deleted once its engine has let go of it. True if it is one (not listed)."""
+    if ((_json(d / "desired.json") or _json(d / "state.json") or {}).get("mode")) != "shadow":
+        return False
+    try:
+        (d / "desired.json").unlink(missing_ok=True)
+        if _age(d / "heartbeat") >= 15:
+            shutil.rmtree(d, ignore_errors=True)
+    except OSError:
+        pass
+    return True
+
+
 def _slots():
     """Session folders (one per strategy). Before the engine's first start after the update, the old
     single-session files are shown as one session."""
@@ -424,6 +438,8 @@ def _slots():
     if SESS.is_dir():
         for d in sorted(SESS.iterdir()):
             if d.is_dir() and ((d / "state.json").exists() or (d / "desired.json").exists()):
+                if _drop_shadow(d):
+                    continue
                 out.append({"id": d.name, "state": d / "state.json", "equity": d / "equity.csv",
                             "desired": d / "desired.json", "beat": d / "heartbeat", "status": d / "status.txt",
                             "stop": d / "STOP"})
@@ -905,11 +921,13 @@ def api_start():
     if label:
         want["label"] = label
     mode = body.get("mode", "paper")
-    if mode not in ("paper", "shadow", "live"):
+    if mode == "shadow":
+        return jsonify(error="Shadow mode was removed: start it LIVE, or try the strategy on Paper."), 400
+    if mode not in ("paper", "live"):
         return jsonify(error="Unknown mode."), 400
     if mode != "paper":
         if body["feed"] != "kite":
-            return jsonify(error="Shadow and live trading need Zerodha live prices."), 400
+            return jsonify(error="Live trading needs Zerodha live prices."), 400
         raw = body.get("live") or {}
         try:
             live = {"max_lots": int(raw.get("max_lots", 1)), "daily_loss_limit": float(raw.get("daily_loss_limit", 0)),
@@ -923,7 +941,7 @@ def api_start():
             return jsonify(error="Lots and orders per day must be at least 1."), 400
         if mode == "live":
             if not strat.get("live_ready"):
-                return jsonify(error="This strategy is not enabled for live orders yet; shadow mode works."), 400
+                return jsonify(error="This strategy is not enabled for live orders yet; try it on Paper."), 400
             if live["daily_loss_limit"] <= 0:
                 return jsonify(error="Set a daily loss limit for live trading."), 400
             if str(body.get("confirm", "")).strip().upper() != "LIVE":
@@ -2920,7 +2938,7 @@ async function load() {
     if ("india" in d) html += india(d.india, d.hidden);
     if ("us" in d && withUS) html += us(d.us, d.hidden);
     if ("paper" in d) html += trading("Paper trading", "/paper/overview", d.paper);
-    if ("live" in d && d.live.total) html += trading("Live &amp; shadow", "/live/overview", d.live);
+    if ("live" in d && d.live.total) html += trading("Live", "/live/overview", d.live);
     html += (d.india ? alerts(d.india.alerts) : "") + health(d.health);
     keepView($("grid"), () => { $("grid").innerHTML = html || '<div class="card empty">Nothing to show for your login yet.</div>'; });
   } catch (e) { $("when").textContent = "Could not refresh: " + e.message; }
@@ -3368,7 +3386,7 @@ input[type=password]{width:100%;padding:9px 11px;border:1px solid var(--line);bo
 
   <div class="card hide" id="alCard">
     <h2>Email and Telegram alerts</h2>
-    <div class="sub">Live and shadow sessions send an alert for every order, protective stop, square-off and close that
+    <div class="sub">Live sessions send an alert for every order, protective stop, square-off and close that
       fails; the dashboard sends its price alerts. They go to your phone's notifications already; switch on Gmail and
       Telegram to get them there too.</div>
     <div class="ach">
@@ -5284,7 +5302,6 @@ details.sec>summary .st{display:inline-flex;align-items:center;gap:6px}
         <div class="tacts"><a class="ibtn" id="dlAll" href="#" download title="Download metrics (CSV)" aria-label="Download metrics (CSV)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>CSV</a>
           <a class="ibtn pri" id="newBtn" href="#" title="Start a session" aria-label="Start a session"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="wide">New session</span></a></div>
       </div>
-      <div class="mfilt hide" id="modeFilt" role="group" aria-label="Show sessions"><button type="button" data-m="all">Both</button><button type="button" data-m="live">LIVE</button><button type="button" data-m="shadow">SHADOW</button></div>
       <div class="tsub" id="grandSub"></div>
       <div class="tsub livectl hide" id="liveCtl"></div>
       <div class="slist" id="summary"></div>
@@ -5378,7 +5395,7 @@ const KIND = "__KIND__", LIVEPAGE = KIND === "live", VIEW = "__VIEW__", NEWVIEW 
 const QS = new URLSearchParams(location.search);
 let last = null, busy = false, formFor = "", pickFor = "", copied = false;
 let selected = decodeURIComponent(location.hash.slice(1));
-const TITLE = NEWVIEW ? (LIVEPAGE ? "Start a shadow or live session" : "Start a paper session")
+const TITLE = NEWVIEW ? (LIVEPAGE ? "Start a live session" : "Start a paper session")
   : (LIVEPAGE ? "Live trading" : "Paper trading") + (OVERVIEW ? " · overview" : "");
 $("title").textContent = TITLE;
 document.title = TITLE + " · Portfolio";
@@ -5389,27 +5406,11 @@ if (OVERVIEW) { $("chipCard").classList.add("hide"); $("detail").classList.add("
 else if (!NEWVIEW) $("totalCard").classList.add("hide");   // Sessions: strategies as buttons; totals and the list are on Overview
 $("newBtn").href = "/" + KIND + "/new";
 $("dlAll").href = "/api/paper/metrics.csv?kind=" + KIND;
-// Live › Overview: show LIVE, SHADOW or both (remembered on this device)
-const MODE_FILTER = LIVEPAGE && OVERVIEW;
-let modeFilter = "all";
-try { const m = localStorage.getItem("live.overview.mode"); if (["all", "live", "shadow"].includes(m)) modeFilter = m; } catch (e) {}
-const modeOfX = x => (x.desired || {}).mode || (x.session && x.session.mode) || "paper";
-const inView = x => !MODE_FILTER || modeFilter === "all" || modeOfX(x) === modeFilter;
-const shown = () => (last.sessions || []).filter(inView);
-function drawModeFilt() {
-  const el = $("modeFilt");
-  el.classList.toggle("hide", !MODE_FILTER);
-  el.querySelectorAll("button").forEach(b => { b.classList.toggle("on", b.dataset.m === modeFilter); b.setAttribute("aria-pressed", String(b.dataset.m === modeFilter)); });
-  $("grandLabel").textContent = !LIVEPAGE ? "Total" : !MODE_FILTER || modeFilter === "all" ? "Total · shadow + live" : "Total · " + modeFilter;
-}
-$("modeFilt").querySelectorAll("button").forEach(b => b.onclick = () => {
-  modeFilter = b.dataset.m;
-  try { localStorage.setItem("live.overview.mode", modeFilter); } catch (e) {}
-  drawModeFilt(); render();
-});
-drawModeFilt();
+const MODE_FILTER = false, modeFilter = "all";   // Live shows LIVE sessions only (Shadow mode was removed)
+const shown = () => last.sessions || [];
+$("grandLabel").textContent = "Total";
 $("footNote").textContent = LIVEPAGE
-  ? "SHADOW sessions check everything a live session would do but send nothing. Only sessions marked LIVE send real orders. Several LIVE sessions may run at once, each with its own lots, orders and daily loss limit, and may hold the same contract; before its first order each one checks that Zerodha's positions equal the sum of all LIVE sessions' legs. Every Zerodha charge is deducted."
+  ? "LIVE sessions send real orders to Zerodha. Several LIVE sessions may run at once, each with its own lots, orders and daily loss limit, and may hold the same contract; before its first order each one checks that Zerodha's positions equal the sum of all LIVE sessions' legs. Every Zerodha charge is deducted."
   : "Paper only: no orders reach Zerodha. Each session has its own account; every Zerodha charge is deducted.";
 const charts = {}, armed = {};
 // which sections of a session are open: remembered on this device (per session and section)
@@ -5439,7 +5440,7 @@ function renderForm() {
   const key = cat.map(x => x.name).join(",");
   if (key === formFor && $("strat")) return;   // keep what the user is typing
   formFor = key;
-  const choices = LIVEPAGE ? {shadow: MODES.shadow, live: MODES.live} : {};
+  const choices = LIVEPAGE ? {live: MODES.live} : {};
   c.innerHTML = `<h2>${head}</h2>
     <select id="strat" class="hide">${cat.map(x => `<option value="${esc(x.name)}">${esc(x.title)}</option>`).join("")}</select>
     <div class="form"><div><label>Strategy</label><div id="stratName" style="font-weight:650;padding:8px 0">–</div></div>
@@ -5447,7 +5448,7 @@ function renderForm() {
     <div class="desc" id="desc"></div>
     <div class="desc" id="presetNote"></div>
     <div class="feeds ${LIVEPAGE ? "hide" : ""}">${Object.entries(FEEDS).map(([k, v]) => `<label><input type="radio" name="feed" value="${k}" ${k === "kite" ? "checked" : ""}> ${v}</label>`).join("")}</div>
-    <div class="feeds ${LIVEPAGE ? "" : "hide"}" id="modes">${Object.entries(choices).map(([k, v]) => `<label><input type="radio" name="mode" value="${k}" ${k === "shadow" ? "checked" : ""}> ${v}</label>`).join("")}</div>
+    <div class="feeds ${LIVEPAGE ? "" : "hide"}" id="modes">${Object.entries(choices).map(([k, v]) => `<label class="hide"><input type="radio" name="mode" value="${k}" checked> ${v}</label>`).join("")}</div>
     <div class="livebox ${LIVEPAGE ? "" : "hide"}" id="livebox">
       <div class="desc" id="liveDesc"></div>
       <div class="form">
@@ -5487,23 +5488,20 @@ async function applyPreset(setVal, done) {
   } catch (e) {}
 }
 const presetFor = name => PRESET && PRESET.strategy === name ? {id: PRESET.id} : null;
-const MODES = {paper: "Paper (simulated orders)", shadow: "Shadow (checks real orders, sends none)", live: "LIVE (real orders)"};
-const modeOf = () => LIVEPAGE ? ((document.querySelector("input[name=mode]:checked") || {}).value || "shadow") : "paper";
+const MODES = {paper: "Paper (simulated orders)", live: "LIVE (real orders)"};
+const modeOf = () => LIVEPAGE ? "live" : "paper";
 const feedOf = () => LIVEPAGE ? "kite" : document.querySelector("input[name=feed]:checked").value;
 function modeUI() {
   if (!LIVEPAGE) return;
-  const ready = !!(stratOf($("strat").value) || {}).live_ready, liveRadio = document.querySelector("input[name=mode][value=live]");
-  liveRadio.disabled = !ready;
-  liveRadio.parentElement.title = ready ? "" : "Not enabled for live orders yet";
-  if (!ready && liveRadio.checked) document.querySelector("input[name=mode][value=shadow]").checked = true;
-  const m = modeOf();
-  $("livebox").classList.toggle("live", m === "live");
-  $("confirmBox").classList.toggle("hide", m !== "live");
-  $("liveDesc").textContent = m === "live"
+  const ready = !!(stratOf($("strat").value) || {}).live_ready;
+  $("livebox").classList.add("live");
+  $("confirmBox").classList.toggle("hide", !ready);
+  $("liveDesc").textContent = ready
     ? "REAL ORDERS will be sent to Zerodha from the server. Limit orders, NRML; a protective stop is left at Zerodha for every option sold. Any rejection or partial fill squares off and stops the session, and you get an alert."
-    : "Shadow: everything a live session does - limits, prices, the exact orders - but nothing is sent; fills are simulated. Run this first.";
-  $("startBtn").textContent = m === "live" ? "Start LIVE trading" : "Start shadow session";
-  $("startBtn").classList.toggle("stop", m === "live");
+    : "This strategy is not enabled for live orders yet. Try it on Paper.";
+  $("startBtn").textContent = ready ? "Start LIVE trading" : "Not enabled for live orders";
+  $("startBtn").disabled = !ready;
+  $("startBtn").classList.add("stop");
 }
 
 
@@ -5511,7 +5509,7 @@ function modeUI() {
 function riskSplit(ps) { return [ps.filter(p => p.group !== "risk"), ps.filter(p => p.group === "risk")]; }
 const RISK_SECTIONS = [["", ["stops"]], ["Each leg", ["leg_unit", "leg_stop", "leg_trail_every", "leg_trail_by", "leg_trail_after", "leg_trail_gap"]],
   ["Whole position (Rs)", ["cycle_loss", "cycle_target", "cycle_lock_after", "cycle_giveback", "reenter_after_stop"]], ["Day (Rs)", ["day_loss", "day_profit"]],
-  ["Orders (live and shadow)", ["order_type", "chase_seconds", "max_chase_pct", "protect_mult"]]];
+  ["Orders (live)", ["order_type", "chase_seconds", "max_chase_pct", "protect_mult"]]];
 function riskRows(ps, row, orders) {
   const by = Object.fromEntries(ps.map(p => [p.key.slice(5), p]));
   return RISK_SECTIONS.filter(([t]) => orders || !t.startsWith("Orders")).map(([t, keys]) => {
@@ -5569,14 +5567,13 @@ function copyToForm(x) {
   $("label").focus();
 }
 
-// ---- Deploy: the same settings to Shadow or LIVE, with what could make it behave unlike the paper run ----------
+// ---- Deploy: a paper session's settings to LIVE, with what could make it behave unlike the paper run ----------
 let DEP = null;     // {src: the session deployed, allow: place orders above max lots with a warning}
 function deployInit(x) {
   const s = x.session || {}, d = x.desired || {}, srcMode = d.mode || s.mode || "paper", lim = d.live || s.live || {};
   DEP = {src: x, srcMode, allow: !!lim.allow_over_max_lots};
   const st = stratOf(x.strategy) || {title: x.strategy, live_ready: false};
-  const want = srcMode === "shadow" && st.live_ready ? "live" : "shadow";
-  const r = document.querySelector(`input[name=mode][value=${want}]`); if (r && !r.disabled) r.checked = true;
+  const want = "live";
   modeUI();                  // the LIVE confirmation box and the button follow the mode
   if (lim.max_lots) $("l_max_lots").value = lim.max_lots;
   if (lim.daily_loss_limit) $("l_daily_loss_limit").value = lim.daily_loss_limit;
@@ -5630,15 +5627,14 @@ function deployWarn() {
   const ot = val("risk.order_type") || "limit_chase", chase = val("risk.chase_seconds"), pct = val("risk.max_chase_pct");
   items.push(["warn", ot === "market"
     ? `<b>Order type: market.</b> Each order is one limit ${pct || 5}% through the market: fills can be worse than the bid / ask the ${esc(DEP.srcMode)} run used.`
-    : `<b>Order type: limit and chase.</b> The ${esc(DEP.srcMode)} run fills at the second's bid / ask. ${live ? "LIVE" : "Shadow"} sends a limit and moves it for up to ${chase || 30} s / ${pct || 5}%: fills can be later and dearer.`]);
+    : `<b>Order type: limit and chase.</b> The ${esc(DEP.srcMode)} run fills at the second's bid / ask. LIVE sends a limit and moves it for up to ${chase || 30} s / ${pct || 5}%: fills can be later and dearer.`]);
   if (live) {
-    if (!st.live_ready) items.push(["bad", "<b>LIVE is off for this strategy</b> (not enabled for live orders). Deploy it to Shadow."]);
+    if (!st.live_ready) items.push(["bad", "<b>LIVE is off for this strategy</b> (not enabled for live orders): it cannot be deployed yet."]);
     const pm = Number(val("risk.protect_mult") || 3);
-    if (pm > 0) items.push(["warn", `<b>Protective stops.</b> For every option sold, a stop is left at Zerodha at ${pm}× the sold price. ${DEP.srcMode === "shadow" ? "Shadow only logged them; here they are real orders that can fill." : "Paper had none."}`]);
+    if (pm > 0) items.push(["warn", `<b>Protective stops.</b> For every option sold, a stop is left at Zerodha at ${pm}× the sold price. Paper had none.`]);
     if (!(Number($("l_daily_loss_limit").value) > 0)) items.push(["bad", "<b>Daily loss limit needed.</b> LIVE needs one: it squares off and stops at that loss."]);
     const days = (srcS.calendar || []).length;
-    if (DEP.srcMode === "paper") items.push(["warn", "<b>Not run in Shadow.</b> Shadow runs every live check and builds the exact orders without sending them: run it first to see what LIVE would refuse."]);
-    else if (days < 10) items.push(["warn", `<b>Short shadow history.</b> ${days} trading day${days === 1 ? "" : "s"} with trades in shadow; the stage gate asks for 10.`]);
+    if (days < 10) items.push(["warn", `<b>Short paper history.</b> ${days} trading day${days === 1 ? "" : "s"} with trades on paper.`]);
   }
   if ((src.desired || {}).feed === "sim" || srcS.feed === "sim") items.push(["warn", "<b>The source ran on simulated prices.</b> Its results say little about Zerodha prices."]);
   $("deployWarn").innerHTML = items.map(([k, h]) => `<div class="dw ${k}">${h}</div>`).join("") +
@@ -5721,7 +5717,7 @@ function sessionCard(x) {
   const syncBtn = mode === "live" && s && !x.killing && !(d.sync_only)
     ? ibtn("sync", "sync", "Sync with Zerodha: book legs you squared off in Kite") : "";
   const copyBtn = syncBtn + ibtn("copy", "copy", "Copy to a new session")
-    + (mode === "paper" || mode === "shadow" ? `<button type="button" class="ibtn pri dep" data-act="deploy" title="Deploy to Shadow or LIVE with the same settings">${icon("deploy", "Deploy")}<span>Deploy</span></button>` : "");
+    + (mode === "paper" ? `<button type="button" class="ibtn pri dep" data-act="deploy" title="Deploy to LIVE with the same settings">${icon("deploy", "Deploy")}<span>Deploy</span></button>` : "");
   const badge = LIVEPAGE || mode !== "paper" ? `<span class="badge ${mode}">${mode.toUpperCase()}</span>` : "";
   const lim = (d.live || (s && s.live)) || null;
   const limits = lim ? `<span class="chip2" title="Live limits">${icon("shield", "Live limits")} ${lim.max_lots} lot${lim.allow_over_max_lots ? " (larger allowed)" : ""} · ${lakh(lim.daily_loss_limit)}/day${lim.protect_mult > 0 ? " · " + lim.protect_mult + "×" : ""}</span>` : "";
@@ -6117,7 +6113,6 @@ function renderSummary() {
       `<a class="srow${i.legs ? "" : " flat"}" href="/${KIND}#${encodeURIComponent(i.id)}" title="${esc(i.stateText)}">
         <span class="sname"><span class="dot ${i.state}"></span><span class="tx">${esc(i.name)}</span>${pips(i.legs)}${feedIcon(i.feed)}${i.stale ? icon("stale", "No update since " + i.stale) : ""}${LIVEPAGE || i.mode !== "paper" ? `<span class="badge ${i.mode}">${i.mode.toUpperCase()}</span>` : ""}</span>
         <span class="n ${sign(i.open || 0)}">${i.legs ? amt(Math.abs(i.open)) : "–"}</span><span class="n ${sign(i.day || 0)}">${i.day == null ? "–" : amt(Math.abs(i.day))}</span><span class="n t ${sign(i.total || 0)}">${i.total == null ? "–" : amt(Math.abs(i.total))}</span></a>`).join("")
-    : MODE_FILTER && modeFilter !== "all" && (last.sessions || []).length ? `<div class="empty">No ${modeFilter.toUpperCase()} sessions. <a href="#" onclick="$('modeFilt').querySelector('[data-m=all]').click();return false">Show both</a>.</div>`
     : `<div class="empty">No sessions yet. <a href="/${KIND}/new">Start one</a>.</div>`;
 }
 
@@ -6128,7 +6123,7 @@ function renderChips() {
   $("chips").innerHTML = it.length ? it.map(i => `<button type="button" class="chip ${i.id === selected ? "sel" : ""}" data-id="${esc(i.id)}" title="${esc(i.stateText)}">
       <span class="cn"><span class="dot ${i.state}"></span> ${esc(i.name)}</span>
       <span class="cv ${sign(i.day || 0)}">${i.day == null ? "–" : ainr(i.day)}<span class="cl"> today</span></span></button>`).join("")
-    : `<div class="emptybox">${icon(LIVEPAGE ? "shield" : "sim", "")}<div>${LIVEPAGE ? "No shadow or live session." : "No paper session yet."}</div>
+    : `<div class="emptybox">${icon(LIVEPAGE ? "shield" : "sim", "")}<div>${LIVEPAGE ? "No live session." : "No paper session yet."}</div>
         <a class="ibtn pri" href="/${KIND}/new"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New session</a></div>`;
   document.querySelectorAll("#chips .chip").forEach(b => b.onclick = () => select(b.dataset.id));
 }
@@ -6549,7 +6544,7 @@ function cur() { return D.strategies.find(s => s.name === $("strategy").value); 
 function riskSplit(ps) { return [ps.filter(p => p.group !== "risk"), ps.filter(p => p.group === "risk")]; }
 const RISK_SECTIONS = [["", ["stops"]], ["Each leg", ["leg_unit", "leg_stop", "leg_trail_every", "leg_trail_by", "leg_trail_after", "leg_trail_gap"]],
   ["Whole position (Rs)", ["cycle_loss", "cycle_target", "cycle_lock_after", "cycle_giveback", "reenter_after_stop"]], ["Day (Rs)", ["day_loss", "day_profit"]],
-  ["Orders (live and shadow)", ["order_type", "chase_seconds", "max_chase_pct", "protect_mult"]]];
+  ["Orders (live)", ["order_type", "chase_seconds", "max_chase_pct", "protect_mult"]]];
 function riskRows(ps, row, orders) {
   const by = Object.fromEntries(ps.map(p => [p.key.slice(5), p]));
   return RISK_SECTIONS.filter(([t]) => orders || !t.startsWith("Orders")).map(([t, keys]) => {
@@ -6962,7 +6957,7 @@ const isNum = p => p.type === "int" || p.type === "float";
 function riskSplit(ps) { return [ps.filter(p => p.group !== "risk"), ps.filter(p => p.group === "risk")]; }
 const RISK_SECTIONS = [["", ["stops"]], ["Each leg", ["leg_unit", "leg_stop", "leg_trail_every", "leg_trail_by", "leg_trail_after", "leg_trail_gap"]],
   ["Whole position (Rs)", ["cycle_loss", "cycle_target", "cycle_lock_after", "cycle_giveback", "reenter_after_stop"]], ["Day (Rs)", ["day_loss", "day_profit"]],
-  ["Orders (live and shadow)", ["order_type", "chase_seconds", "max_chase_pct", "protect_mult"]]];
+  ["Orders (live)", ["order_type", "chase_seconds", "max_chase_pct", "protect_mult"]]];
 function riskRows(ps, row, orders) {
   const by = Object.fromEntries(ps.map(p => [p.key.slice(5), p]));
   return RISK_SECTIONS.filter(([t]) => orders || !t.startsWith("Orders")).map(([t, keys]) => {
@@ -7369,7 +7364,7 @@ table.days tr[data-act]{cursor:pointer}table.days tr.on td{box-shadow:inset 0 -2
 <div class="cols"><div class="side">
   <div class="card">
     <h2>New comparison</h2>
-    <div class="muted">Each session that traded in the period (paper, shadow and live) is backtested with its own settings on the same days: on the 1-minute set, and stepped every second on the recorded 1-second bars. The backtests start flat at 09:15 on the first day. Runs on the server after the close.</div>
+    <div class="muted">Each session that traded in the period (paper and live) is backtested with its own settings on the same days: on the 1-minute set, and stepped every second on the recorded 1-second bars. The backtests start flat at 09:15 on the first day. Runs on the server after the close.</div>
     <div class="two">
       <div><label for="from">From</label><input type="date" id="from"></div>
       <div><label for="to">To</label><input type="date" id="to"></div>
@@ -7633,7 +7628,7 @@ function renderReport() {
   const bars = j.bars || ["1m"], t = j.totals || {};
   const card = (name, x, ref) => `<div class="tc"><div class="sub">${name}</div><div class="big ${cls(x)}">${x == null ? "n/a" : amt(x)}</div>${ref != null && x != null ? `<div class="sub">${amt(Math.abs(x - ref)).replace("-", "")} ${x >= ref ? "better" : "worse"} than the sessions</div>` : ""}</div>`;
   const paper = t.paper || {}, live = t.live || {};
-  let html = `<div class="tgrid3">${card("Sessions (paper + shadow)", paper.actual)}${bars.map(b => card(KNAME["bt_" + b], paper["bt_" + b], paper.actual)).join("")}</div>`;
+  let html = `<div class="tgrid3">${card("Sessions (paper)", paper.actual)}${bars.map(b => card(KNAME["bt_" + b], paper["bt_" + b], paper.actual)).join("")}</div>`;
   if (live.actual != null) html += `<div class="sub" style="margin-top:6px">Live (real money, never added to paper): ${amt(live.actual)}${bars.map(b => live["bt_" + b] != null ? ` · ${b} ${amt(live["bt_" + b])}` : "").join("")}</div>`;
   html += whyBanner(j);
   html += `<div class="sub" style="margin-top:6px">Gap = backtest minus actual. A day is flagged when the gap is over ₹500 and over 10% of the day's actual P&amp;L. ${j.flagged} flag${j.flagged === 1 ? "" : "s"}.</div>`;

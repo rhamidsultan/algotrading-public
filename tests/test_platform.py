@@ -532,8 +532,10 @@ def test_portfolio_page_api(tmp_path, monkeypatch):
     assert c.post("/api/live/settings", json={"max_sessions": 1}).status_code == 200
     r = c.post("/api/paper/start", json={**live, "confirm": "LIVE"})
     assert r.status_code == 400 and "the limit is 1" in r.get_json()["error"]                   # LIVE session limit
-    r = c.post("/api/paper/start", json={**live, "mode": "shadow", "live": {**live["live"], "allow_over_max_lots": True}})
-    assert r.status_code == 200                                                                 # shadow is fine
+    r = c.post("/api/paper/start", json={**live, "mode": "shadow"})
+    assert r.status_code == 400 and "Shadow mode was removed" in r.get_json()["error"]           # no more Shadow
+    assert c.post("/api/live/settings", json={"max_sessions": 3}).status_code == 200
+    r = c.post("/api/paper/start", json={**live, "confirm": "LIVE", "live": {**live["live"], "allow_over_max_lots": True}})
     assert json.loads((sess / r.get_json()["id"] / "desired.json").read_text())["live"]["allow_over_max_lots"] is True
     # the two pages show their own sessions
     paper_ids = {x["id"] for x in c.get("/api/paper?kind=paper").get_json()["sessions"]}
@@ -1438,7 +1440,7 @@ def test_several_live_sessions_limit_and_stop_all(tmp_path, monkeypatch):
     assert c.post("/api/live/settings", json={"max_sessions": 11}).status_code == 400
     assert c.post("/api/live/settings", json={"max_sessions": 4}).get_json()["max_sessions"] == 4
     assert c.post("/api/paper/start", json=live).status_code == 200
-    assert c.post("/api/paper/start", json={**live, "mode": "shadow"}).status_code == 200     # shadow never counts
+    assert c.post("/api/paper/start", json={**live, "mode": "shadow"}).status_code == 400     # Shadow was removed
     assert len(c.get("/api/live/settings").get_json()["running"]) == 4
     # Stop all LIVE: every live session gets Stop & square off, shadow and paper are left alone
     stopped = c.post("/api/live/stop-all").get_json()["stopped"]

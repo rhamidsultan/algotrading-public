@@ -56,8 +56,7 @@ def test_only_comparison_jobs_and_well_formed_ids_are_accepted(app):
     assert (mod.BT_JOBS / f"{JID}.json").exists()
 
 
-def test_live_overview_has_the_live_shadow_filter(app):
-    c, mod = app
+def test_live_overview_has_no_shadow_filter(app):
+    c, mod = app                                                     # Shadow mode was removed (18 Nov 2026)
     html = c.get("/live/overview").get_data(as_text=True)
-    assert 'id="modeFilt"' in html and 'data-m="live"' in html and 'data-m="shadow"' in html and 'data-m="all"' in html
-    assert "const MODE_FILTER = LIVEPAGE && OVERVIEW" in html        # only on Live › Overview, never on Paper
+    assert 'id="modeFilt"' not in html and 'data-m="shadow"' not in html and "Start shadow session" not in html
