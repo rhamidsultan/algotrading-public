@@ -835,19 +835,29 @@ def test_premium_strangle_backtests_and_exits_by_expiry():
 
 
 # ---- live orders (fake Zerodha) -----------------------------------------------------------
+class _OrderBook(dict):
+    """The fake's orders by id; called like Kite's orders(), it gives the day's order book (the fields read)."""
+
+    def __call__(self):
+        return [{"order_id": o["order_id"], "tradingsymbol": o["sym"], "transaction_type": o["side"], "tag": o["tag"],
+                 "order_type": o["type"], "status": o["status"], "filled_quantity": o["filled_quantity"]}
+                for o in self.values()]
+
+
 class FakeOrders(FakeKite):
     """FakeKite plus an order book. `mode` decides what happens to the next LIMIT order."""
 
     def __init__(self, expiry, mode="fill"):
         super().__init__(expiry)
-        self.mode, self.orders, self.n, self.history_calls = mode, {}, 0, 0
+        self.mode, self.orders, self.n, self.history_calls = mode, _OrderBook(), 0, 0
 
     def place_order(self, variety, exchange, tradingsymbol, transaction_type, quantity, product, order_type,
                     price=None, trigger_price=None, validity=None, tag=None, **k):
         self.n += 1
         oid = str(self.n)
         o = {"order_id": oid, "sym": tradingsymbol, "side": transaction_type, "qty": quantity, "type": order_type,
-             "price": price, "trigger": trigger_price, "product": product, "filled_quantity": 0, "average_price": 0}
+             "price": price, "trigger": trigger_price, "product": product, "filled_quantity": 0, "average_price": 0,
+             "tag": tag}
         if order_type == "SL":
             o["status"] = "TRIGGER PENDING"
         elif self.mode == "fill":
@@ -941,7 +951,7 @@ def test_protective_stop_fill_and_mismatch_are_caught():
     b, e = _live_broker(k)
     c = Contract("NIFTY", e, 24300, "CE")
     b.execute(NOW, c, "SELL", 65, Quote(20.0, bid=19.9, ask=20.1), "Entry", "g")
-    b.reconcile()   # matches Zerodha
+    b.reconcile(NOW)   # matches Zerodha
     sl = k.sent("SL")[0]
     sl.update(status="COMPLETE", filled_quantity=65, average_price=61.0)
     with pytest.raises(Halt, match="Protective stop filled"):
@@ -951,7 +961,7 @@ def test_protective_stop_fill_and_mismatch_are_caught():
     b3, _ = _live_broker(FakeOrders(date(2026, 10, 13)))
     b3._apply(NOW, c, "SELL", 65, 20.0, 0.0, "Entry", "g", "live")
     with pytest.raises(Blocked, match="differ from Zerodha"):
-        b3.reconcile()
+        b3.reconcile(NOW)
 
 
 def test_shadow_session_sends_nothing_and_kill_squares_off(tmp_path, monkeypatch):
@@ -1450,14 +1460,14 @@ def test_live_sessions_holding_the_same_contract_reconcile_against_their_sum():
     a2, _ = _live_broker(k)
     a2.load_dict(json.loads(json.dumps(a.to_dict())))
     with pytest.raises(Blocked, match="ours -65, Zerodha -130"):
-        a2.reconcile()             # alone it looks wrong
+        a2.reconcile(NOW)             # alone it looks wrong
     a2.others = lambda: {"NIFTY26O1324300CE": -65}
-    a2.reconcile()                 # with the other live session's -65 it matches
+    a2.reconcile(NOW)                 # with the other live session's -65 it matches
     a3, _ = _live_broker(k)
     a3.load_dict(json.loads(json.dumps(a.to_dict())))
     a3.others = lambda: {"NIFTY26O1324300CE": -130}
     with pytest.raises(Blocked, match="other live sessions -130"):
-        a3.reconcile()
+        a3.reconcile(NOW)
     # each session has its own protective stop for its own 65
     assert len(k.sent("SL")) == 2 and all(o["qty"] == 65 for o in k.sent("SL"))
 

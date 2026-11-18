@@ -12,6 +12,59 @@ Newest information first within each section.
 - `deploy/update_source.sh` (run by every update) records `update_repo` (public, https) and `repo` (deploy key: the
   IBKR snapshot, still from the private repo's `ibkr-snapshot` branch, and updates from a private repo). The server's
   copy follows a new update address (`git remote set-url`).
+## Legs held overnight close the next day (17 Nov 2026, pull request "live-next-day-stops", needs 134)
+
+- Why: protective stops are DAY orders. The morning after a short leg was held overnight (premium_strangle,
+  put_credit_spread, iron_fly, double_calendar...), Zerodha no longer knows the old stop's order id ("Couldn't find
+  that order_id"). Every buy-back of that leg first read the stop, failed on that error and gave up: every second, no
+  square-off, no alert. The stop check every 30 s failed the same way. The session also lived across days without
+  restarting (the feed adopts the morning login), so the start-of-session check never ran again.
+- Now: each new day the start-of-day check runs again before any order (positions against Zerodha; stops not in
+  today's order book are placed again, at the old trigger or 1.2x the price). An order Zerodha cannot find and that is
+  not in today's order book counts as gone. Before a leg whose stop is gone is bought back, Zerodha must still hold
+  exactly that leg (the stop may have filled): otherwise nothing is sent and the session stops for a check in Kite.
+- A stop or position check that cannot read Zerodha at that moment is logged (once a minute) and no longer stops the
+  strategy, and so its exits, from running.
+- Orders in the restart journal from an earlier day no longer block the morning check (alert when one is dropped).
+- A stop counts as gone only if Kite says it cannot find it, it was placed on an earlier day, and today's order book
+  does not list it: a timeout or a lagging order book never leads to a second stop. A gone stop stays tracked until a
+  new one is placed (tried at every 30 s check, one alert if it cannot be placed). A filled stop still stops the session
+  first. A two-leg exit checks every gone stop before taking any stop off. Zerodha's positions are read twice before
+  a difference blocks. A mismatch in the morning still renews the stops of the legs that match and names the legs
+  left without one. Legs past their expiry are left to the settlement (no false mismatch the morning after expiry).
+- Zerodha that cannot be read for 2 minutes in a row sends one alert ("Algo Lab cannot check Zerodha").
+- Also fixed (found by the review): selling more of a short leg used to leave its first stop at Zerodha untracked next
+  to a new one (two could fill); now the stop is replaced by one for the whole leg. A stop that filled in part and was
+  cancelled at the close is booked.
+- Each protective stop now has its own tag: if Zerodha's answer to a placement is lost, the stop is found and adopted,
+  never placed a second time; while that cannot be told, no other stop is placed for the leg. A stop is placed again
+  only on a leg Zerodha still holds. A "cannot check Zerodha" alert counts each kind of check on its own.
+- Order-safety review (independent agent, 17 Nov, six rounds): PASS WITH FIXES (4 High, 4 Medium) → fixes → PASS WITH
+  FIXES (1 Critical, 2 High, 1 Medium, in the new stop retry) → fixes → PASS WITH FIXES (1 High: a stop whose answer was
+  lost) → fixes → PASS WITH FIXES (1 High) → fixes → PASS WITH FIXES (1 Medium) → fixes → PASS (3 Low, also fixed).
+
+## Live closes never give up (10 Nov 2026, pull request "close-never-gives-up")
+
+- Why: 9 Nov (expiry day) intraday_strangle-7's exit BUY 65 NIFTY 24900 CE did not fill in the 30 s chase (capped at
+  5% from the first price), the square-off repeated the same chase, and the session stopped with "close these in Kite
+  now", the leg's protective stop already taken off.
+- Closing orders (`algolab/live.py`): after `chase_seconds`, what is left is re-sent further through the best price
+  (2, 5, 10, 20, 30% in 10 s rounds; `close_max_through_pct` default 30, never past the circuit limit) for
+  `close_retry_seconds` (default 60). A step Zerodha rejects is not tried again.
+- Never two orders at once for a leg: each order has its own tag and is written to `runtime/sessions/<id>/working.json`
+  before it is sent; it is confirmed finished before the next one. One that may still fill (cancel not confirmed, answer
+  lost) is read and its fill booked before anything else is sent for that leg, also after a restart.
+- Every order may follow the market at least 3 ticks (5% of a cheap option is less than a tick: it was never re-priced).
+- A leg that still cannot be closed gets its protective stop back (old trigger, or 1.2x the price if higher), except
+  while a buy may still fill. At start the engine also puts back any missing stop on a short leg.
+- The session then goes "closing only" (`algolab/paper.py`): a short try every 30 s, also after a restart (same day),
+  sending only what Zerodha still holds for it. Nothing is sent if another order works on the symbol (e.g. from Kite);
+  a leg closed in Kite is booked as closed (alert); a position that does not fit (twice in a row) stops it untouched.
+  Alert when closed and every 10 tries; at 15:25 IST, or on Stop, it ends and asks for Kite, the stop staying.
+- Known limit: the first square-off still closes legs one after another (up to ~90 s each); other sessions wait.
+- Not changed: the Positions page's manual close (30 s, 5%).
+- Order-safety review (independent agent, 10 Nov): FAIL (2 Critical, 5 High) → fixes → PASS WITH FIXES (2 High) → fixes → PASS (2 Low, fixed).
+
 ## Positions page (29 Oct 2026, pull request "positions-page")
 
 - Live › Positions (`/positions`, owner only, `server/portfolio/positions_panel.py`): open Zerodha positions with live
@@ -433,3 +486,4 @@ Later.
 - 2 Nov 2026: Several LIVE sessions at once (pull request "multi-live", needs "stop-when-closed"). Up to a limit the owner sets on Live › Overview (default 3, 1–10; `runtime/live_settings.json`); shadow and paper never count. Sessions may hold the same contract: before its first order each live session checks that Zerodha's net NRML position equals its own legs plus the other running live sessions' legs (it still stops without trading on any other difference). Each session keeps its own lots, orders per day, daily loss limit and protective stops sized to its own quantity. Live › Overview shows how many LIVE sessions run and has Stop all LIVE (tap twice): every live session squares off its own legs and stops. Known limit: all Zerodha sessions run on one thread, so while one session re-prices an order (up to 30 s) the others wait; their protective stops at Zerodha keep working meanwhile.
 - 2 Nov 2026: Live safety for several LIVE sessions. (1) A session may not open a contract another LIVE session holds the other way round (Zerodha nets the two, so an exit would open a new position there); it stops and squares off instead. (2) Buying a leg back waits until Zerodha confirms its protective stop is cancelled; a stop that filled meanwhile is booked instead of buying again, a part-filled stop leaves only the rest to buy, and if the cancel cannot be confirmed nothing is bought (the stop stays) and an alert goes out. (3) Every minute while trading, each live session checks Zerodha's net position in its contracts against its own legs plus the other live sessions'; a difference at two checks in a row stops it without sending anything. Positions at Zerodha that no live session holds are reported once a day (no stop: Positions page legs live there too).
 - 2 Nov 2026: Live › Overview has a Both / LIVE / SHADOW filter above the session list. It filters the totals, the list, the payoffs and the calendar; the choice is remembered on that device. Live › Sessions and Paper are unchanged.
+- 17 Nov 2026: Email (Gmail) and Telegram alerts set on Profile › Email and Telegram alerts (owner only): switch each on, Gmail app password, Telegram bot token, Find my chat id, Send a test. Saved in the dashboard's `config.json` (`email`, `telegram`), file readable by its owner only; used at once by the dashboard's price alerts and by live / shadow sessions (every order, protective stop, square-off and failed close). The engine now sends these from a background thread, so an alert never holds up an order.
