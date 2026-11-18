@@ -5,8 +5,15 @@ shadow  everything a live session would do - guards, prices, the exact orders it
         "SHADOW". Use it for a week before going live.
 live    orders are sent to Zerodha:
           - LIMIT orders at the best bid (sell) / ask (buy), product NRML (can be held overnight),
-            re-priced to the new best bid/ask every few seconds; given up after `chase_seconds`
-            or if the price would move more than `max_chase_pct` from the first price
+            re-priced to the new best bid/ask every few seconds; an order that OPENS a position is
+            given up after `chase_seconds` or if the price would move more than `max_chase_pct`
+            (at least MIN_CHASE_TICKS ticks) from the first price
+          - an order that CLOSES a position is not given up after `chase_seconds`: it is re-sent
+            further through the best price each round (CLOSE_STEPS percent, at most
+            `close_max_through_pct` and never past the circuit limit) for up to
+            `close_retry_seconds` more. Each order is confirmed cancelled before the next is sent,
+            so a leg is never bought twice. If it still cannot be closed, its protective stop is
+            put back at Zerodha and the session keeps retrying (paper.py, closing only)
           - after an option is sold, a protective SL buy order is left at Zerodha at
             `protect_mult` x the sold price, so a crash, a missed login or a server outage cannot
             leave a short option unprotected; it is cancelled before the leg is bought back
@@ -21,7 +28,9 @@ from __future__ import annotations
 
 import json
 import math
+import secrets
 import smtplib
+import threading
 import time as _time
 import urllib.parse
 import urllib.request
@@ -30,6 +39,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 from .broker import PaperBroker
+from .config import ist_now
 from .models import Contract, Quote
 
 
@@ -39,6 +49,20 @@ class Halt(RuntimeError):
 
 class CancelFailed(Halt):
     """A protective stop could not be confirmed cancelled: the buy-back was not sent."""
+
+
+class Unconfirmed(Halt):
+    """An order may still fill (its cancel was never confirmed, or Zerodha did not answer when it was sent). It is kept
+    in LiveBroker.working and nothing more is sent for that leg until it is read as finished. `filled`/`avg`: what did
+    fill in this attempt (all its orders), to be booked by the caller."""
+
+    def __init__(self, msg: str, filled: int = 0, avg: float = 0.0):
+        super().__init__(msg)
+        self.filled, self.avg = filled, avg
+
+
+class NotPlaced(Halt):
+    """Zerodha surely did not take the order (it is not in the day's order book): safe to send again."""
 
 
 class Blocked(Halt):
@@ -58,6 +82,9 @@ class LiveSettings:
     allow_over_max_lots: bool = False  # per session (chosen when deploying): an order above max_lots is placed with a
     #                                    warning and an alert instead of stopping the session. Daily loss limit and
     #                                    orders per day stay hard limits.
+    close_retry_seconds: int = 60    # a closing order not filled in chase_seconds keeps going this much longer
+    close_max_through_pct: float = 30.0  # ...at most this far through the best price (a limit still fills at the best
+    #                                      price there is: this only bounds a fill into an empty book)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "LiveSettings":
@@ -75,6 +102,8 @@ class LiveSettings:
             raise ValueError("max_lots must be at least 1")
         if s.order_type not in ("limit_chase", "market"):
             raise ValueError("order_type must be limit_chase or market")
+        if s.close_retry_seconds < 0 or s.close_max_through_pct <= 0:
+            raise ValueError("close_retry_seconds must be 0 or more and close_max_through_pct above 0")
         return s
 
 
@@ -110,20 +139,33 @@ def make_notifier(trader_config: str | None, log=print):
 
 # ---- the broker --------------------------------------------------------------------------
 class LiveBroker(PaperBroker):
-    CANCEL_CONFIRM_TRIES = 5          # reads of a cancelled stop's status (1 s apart) before giving up
+    CANCEL_CONFIRM_TRIES = 5          # reads of a cancelled order's status (1 s apart) before giving up
     POSITIONS_EVERY = 60              # seconds between position checks against Zerodha while trading
+    MIN_CHASE_TICKS = 3               # an order may always follow the market this many ticks (5% of a Rs 0.60 option
+    #                                   is less than one tick: before this, cheap options were never re-priced)
+    CLOSE_ROUND_SECONDS = 10          # each further-through try of a closing order
+    CLOSE_STEPS = (2.0, 5.0, 10.0, 20.0, 30.0)   # % through the best price, one step per round (capped by settings)
+    REPROTECT_ABOVE = 1.2             # a stop put back after a failed close: at least this x the price now
+    LOOKUPS_AFTER_ERROR = 3           # reads of the order book (LOOKUP_GAP s apart) for an order sent with an error answer
+    LOOKUP_GAP = 3.0
     _unowned_told: set = set()        # (day, symbol) already reported as held by no live session (one alert a day)
 
-    def __init__(self, *a, settings: LiveSettings, notify=None, log=print, sleep=_time.sleep, **k):
+    def __init__(self, *a, settings: LiveSettings, notify=None, log=print, sleep=None, **k):
         super().__init__(*a, **k)
         self.s = settings
         self.notify = notify or (lambda subj, body: None)
         self.log = log
-        self.sleep = sleep
+        self.sleep = sleep or (lambda seconds: _time.sleep(seconds))
         self.kite = None
         self.symbol_of = lambda c: None
         self.protect: dict[str, str] = {}          # contract label -> protective SL order id
         self.protect_level: dict[str, float] = {}  # contract label -> its trigger now (moved with a trailing stop)
+        self.released: dict[str, float] = {}       # contract label -> trigger of a stop taken off to close the leg
+        self.working: dict[str, dict] = {}         # tag -> order sent and not yet known finished (also on disk)
+        self.journal: Path | None = None           # where `working` is written the moment it changes (restart-safe)
+        self._lock = threading.RLock()             # execute_many works orders from threads
+        self._quoted = 0.0
+        self._held_odd: set = set()                # symbols whose Zerodha position did not fit at the last retry
         self._follow_at: dict[str, float] = {}
         self._follow_n: dict[str, int] = {}
         self.orders_today = {"date": "", "n": 0}
@@ -148,7 +190,7 @@ class LiveBroker(PaperBroker):
     def to_dict(self) -> dict:
         d = super().to_dict()
         d["live"] = {"protect": self.protect, "protect_level": self.protect_level, "orders_today": self.orders_today,
-                     "contracts": {k: c.to_dict() for k, c in self.contracts.items()}}
+                     "released": self.released, "working": self.working, "contracts": {k: c.to_dict() for k, c in self.contracts.items()}}
         return d
 
     def load_dict(self, d: dict) -> None:
@@ -156,6 +198,9 @@ class LiveBroker(PaperBroker):
         live = d.get("live") or {}
         self.protect = dict(live.get("protect", {}))
         self.protect_level = {k: float(v) for k, v in (live.get("protect_level") or {}).items()}
+        self.released = {k: float(v) for k, v in (live.get("released") or {}).items()}
+        self.working = {k: dict(v) for k, v in (live.get("working") or {}).items() if isinstance(v, dict)}
+        self._read_journal()
         self.orders_today = dict(live.get("orders_today", {"date": "", "n": 0}))
         self.contracts = {k: Contract.from_dict(v) for k, v in live.get("contracts", {}).items()}
 
@@ -165,6 +210,11 @@ class LiveBroker(PaperBroker):
         may hold the same contract: Zerodha's net must then equal ours plus what the other live sessions hold."""
         if self.s.mode != "live" or self.reconciled:
             return
+        self._read_journal()
+        left = self.settle_working(None)
+        if left:
+            raise Halt("Orders sent before a restart are still working at Zerodha (" + "; ".join(left) + "). Nothing "
+                       "more was sent.")
         net = {}
         for p in (self.kite.positions() or {}).get("net", []):
             if p.get("exchange") == "NFO" and p.get("product") == "NRML":
@@ -181,6 +231,21 @@ class LiveBroker(PaperBroker):
             raise Blocked("Positions differ from Zerodha (" + "; ".join(diffs) + "). Nothing was sent. "
                        "Square off or fix them in Kite, reset this session's account, then start again.")
         self.reconciled = True
+        try:   # a stop that is not in today's order book is gone (DAY orders end with the day)
+            today = {str(o.get("order_id")): str(o.get("status", "")).upper() for o in self.kite.orders() or []}
+        except Exception:  # noqa: BLE001 - unknown: keep them
+            today = None
+        for c in list(self.positions):          # a short leg whose stop was off when the engine stopped gets it back
+            sym = self.symbol_of(c)
+            oid = self.protect.get(c.label)
+            if oid and today is not None and today.get(oid, "CANCELLED") in ("CANCELLED", "REJECTED"):
+                self.log(f"Protective stop {oid} for {c.label} is no longer at Zerodha; placing a new one")
+                self.protect.pop(c.label, None)
+                level = self.protect_level.pop(c.label, None)
+                if level:
+                    self.released[c.label] = level
+            if sym:
+                self._reprotect(c, sym)
 
     def _zerodha_net(self) -> dict:
         net = {}
@@ -260,73 +325,349 @@ class LiveBroker(PaperBroker):
         px = (math.floor(ticks) if side == "SELL" else math.ceil(ticks)) * self.tick
         return max(round(px, 2), self.tick)
 
-    def _fresh_price(self, sym: str, side: str) -> float | None:
-        try:
-            d = self.kite.quote([f"NFO:{sym}"])[f"NFO:{sym}"]
-            depth = d.get("depth") or {}
-            book = depth.get("buy" if side == "SELL" else "sell") or [{}]
-            return book[0].get("price") or d.get("last_price")
-        except Exception:  # noqa: BLE001
-            return None
+    def _tick_px(self, side: str, px: float) -> float:
+        """A limit price on the tick grid, rounded towards the market (up to buy, down to sell)."""
+        ticks = round(px / self.tick, 6)
+        return max(round((math.ceil(ticks) if side == "BUY" else math.floor(ticks)) * self.tick, 2), self.tick)
 
-    def _place_and_wait(self, sym: str, side: str, qty: int, quote: Quote) -> tuple[int, float, str]:
+    # ---- orders in flight (restart-safe) -------------------------------------------------
+    def _read_journal(self) -> None:
+        if self.journal is None:
+            return
+        try:
+            on_disk = json.loads(self.journal.read_text())
+        except (OSError, ValueError):
+            return
+        with self._lock:
+            for tag, w in (on_disk or {}).items():
+                self.working.setdefault(tag, dict(w))
+
+    def _write_journal(self) -> None:
+        if self.journal is None:
+            return
+        try:
+            tmp = self.journal.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.working))
+            tmp.replace(self.journal)
+        except OSError as e:
+            self.log(f"working orders not saved: {e}")
+
+    def _track(self, tag: str, **fields) -> None:
+        with self._lock:
+            if fields.get("done"):
+                self.working.pop(tag, None)
+            else:
+                self.working.setdefault(tag, {}).update(fields)
+            self._write_journal()
+
+    def _find_by_tag(self, tag: str) -> dict | None:
+        """The day's order with this tag at Zerodha, None if there is none. Raises if the order book cannot be read."""
+        for o in self.kite.orders() or []:
+            if o.get("tag") == tag:
+                return o
+        return None
+
+    def _open_orders(self, sym: str) -> list:
+        """Orders still working at Zerodha for this symbol, Algo Lab's own protective stops left out (any session's:
+        they only trigger far away). Raises if they cannot be read."""
+        return [o for o in self.kite.orders() or [] if o.get("tradingsymbol") == sym
+                and not str(o.get("tag") or "").startswith("algolab-stop")
+                and str(o.get("status", "")).upper() not in self.FINISHED]
+
+    def settle_working(self, now, label: str | None = None) -> list:
+        """Read every order that may still fill (all, or one leg's): book what it filled that is not booked yet and
+        forget it once finished. Returns what is still working (as text), after trying to cancel it once more."""
+        left = []
+        for tag, w in list(self.working.items()):
+            if label is not None and w.get("label") != label:
+                continue
+            oid = w.get("oid") or ""
+            try:
+                if not oid:                         # sent, but Zerodha's answer was lost: look it up by its tag
+                    o = self._find_by_tag(tag)
+                    if o is None:
+                        self._track(tag, done=True)  # never reached Zerodha
+                        continue
+                    oid = str(o.get("order_id"))
+                    self._track(tag, oid=oid)
+                last = self._confirm_cancel(oid, {})
+            except Exception as e:  # noqa: BLE001
+                left.append(f"{w.get('label')}: order {oid or tag} not read ({e})")
+                continue
+            if str(last.get("status", "")).upper() not in self.FINISHED:
+                left.append(f"{w.get('label')}: order {oid} still working")
+                continue
+            got = int(last.get("filled_quantity") or 0) - int(w.get("booked") or 0)
+            c = self.contracts.get(w.get("label"))
+            if got > 0 and c is None:
+                self.notify("Algo Lab: fill of an unknown leg", f"order {oid}: {w.get('side')} {got} {w.get('sym')} "
+                            "filled, but this session has no such leg (e.g. after a reset). Check Kite.")
+            if got > 0 and c is not None:
+                side = w["side"]
+                pos = self.positions.get(c)
+                if pos is not None and ((pos.qty < 0) == (side == "BUY")):
+                    got = min(got, abs(pos.qty))    # never book a close beyond the leg
+                avg = float(last.get("average_price") or 0)
+                when = now or ist_now()
+                self._apply(when, c, side, got, round(avg, 2), self.schedule.at(when).order_cost(side, avg * got),
+                            "Fill read later", w.get("group", ""), "live")
+                msg = f"order {oid}: {side} {got} {w.get('sym')} at {avg:.2f} filled while unread; booked now"
+                self.log(msg)
+                self.notify("Algo Lab: late fill booked", f"{w.get('label')}: {msg}")
+            self._track(tag, done=True)
+            if c is not None and c in self.positions:
+                if got > 0 and w.get("side") == "SELL":
+                    self._resize_protect(c, w.get("sym"))
+                self._reprotect(c, w.get("sym"))
+        return left
+
+    def _resize_protect(self, contract, sym) -> None:
+        """A short leg that grew (a late fill) while it had a stop: replace the stop so it covers the whole leg."""
+        if contract.label not in self.protect or self.s.mode != "live":
+            return
+        try:
+            if self._cancel_protect(contract, ist_now()):
+                return
+        except Exception as e:  # noqa: BLE001 - a stop not confirmed gone stays; a read error: put one back if off
+            self.notify("Protective stop not resized", f"{contract.label}: {e}")
+        self._reprotect(contract, sym)
+
+    def _touch(self, sym: str, side: str) -> tuple[float | None, float | None]:
+        """The best price to trade against now (ask to buy, bid to sell; last price if that side is empty) and the
+        circuit limit on that side, from one quote request (at most one a second from this session: Zerodha's limit).
+        (None, None) if Zerodha does not answer."""
+        with self._lock:
+            wait = 1.0 - (_time.monotonic() - self._quoted)
+            if 0 < wait <= 1.0:
+                self.sleep(wait)
+            self._quoted = _time.monotonic()
+            try:
+                d = self.kite.quote([f"NFO:{sym}"])[f"NFO:{sym}"]
+            except Exception:  # noqa: BLE001
+                return None, None
+        depth = d.get("depth") or {}
+        book = depth.get("buy" if side == "SELL" else "sell") or [{}]
+        px = (book[0] or {}).get("price") or d.get("last_price")
+        band = d.get("upper_circuit_limit") if side == "BUY" else d.get("lower_circuit_limit")
+        return (float(px) if px else None), (float(band) if band else None)
+
+    def _fresh_price(self, sym: str, side: str) -> float | None:
+        return self._touch(sym, side)[0]
+
+    def _confirm_cancel(self, oid: str, last: dict) -> dict:
+        """Cancel an order and read it until Zerodha shows it finished (CANCELLED, COMPLETE or REJECTED), so what it
+        filled is known before anything else is sent. Returns its last state (not finished if it never confirmed)."""
+        try:
+            self.kite.cancel_order(variety="regular", order_id=oid)
+        except Exception as e:  # noqa: BLE001 - it may have filled meanwhile: read it below
+            self.log(f"Order {oid}: cancel failed: {e}")
+        for n in range(self.CANCEL_CONFIRM_TRIES):
+            try:
+                last = (self.kite.order_history(oid) or [last])[-1]
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Order {oid}: status not read: {e}")
+            if str(last.get("status", "")).upper() in self.FINISHED:
+                return last
+            if n < self.CANCEL_CONFIRM_TRIES - 1:
+                self.sleep(1)
+        return last
+
+    FINISHED = ("COMPLETE", "CANCELLED", "REJECTED")
+
+    def _work(self, sym, side, qty, price, seconds, reprice, label="", group="") -> tuple[int, float, str, str, str, int]:
+        """Place one LIMIT order and work it for `seconds`: every 5 s reprice(current price) may give a new price.
+        Not filled by then: cancelled and confirmed. Returns (filled, average price, order id, status, message, seconds
+        used) with status COMPLETE, REJECTED, CANCELLED (by Zerodha or the exchange) or TIMEOUT (we cancelled it).
+        Raises NotPlaced if Zerodha surely did not take it, Unconfirmed if it may still fill (it stays in `working`,
+        on disk from before it is sent, so a restart finds it)."""
+        tag = "algolab" + secrets.token_hex(3)
+        self._track(tag, sym=sym, side=side, qty=qty, label=label, group=group, oid="", booked=0)
+        try:
+            oid = str(self.kite.place_order(variety="regular", exchange="NFO", tradingsymbol=sym, transaction_type=side,
+                                            quantity=qty, product="NRML", order_type="LIMIT", price=price,
+                                            validity="DAY", tag=tag))
+        except Exception as e:  # noqa: BLE001 - it may still have reached Zerodha: look for it before anything else
+            found = None
+            for n in range(self.LOOKUPS_AFTER_ERROR):   # a queued order can show in the order book a few seconds late
+                try:
+                    found = self._find_by_tag(tag)
+                except Exception:  # noqa: BLE001
+                    raise Unconfirmed(f"{side} {qty} {sym}: Zerodha did not answer ({e}) and its order book could not "
+                                      "be read; nothing more is sent until it is.") from None
+                if found is not None:
+                    break
+                if n < self.LOOKUPS_AFTER_ERROR - 1:
+                    self.sleep(self.LOOKUP_GAP)
+            if found is None:
+                self._track(tag, done=True)
+                raise NotPlaced(f"Zerodha refused the order {side} {qty} {sym}: {e}") from None
+            oid = str(found.get("order_id"))
+            self.log(f"Order {oid}: placed although Zerodha answered with an error ({e})")
+        self._track(tag, oid=oid)
+        self.log(f"Order {oid}: {side} {qty} {sym} LIMIT {price:.2f}")
+        last: dict = {}
+        for i in range(1, seconds + 1):
+            try:
+                st = self.stream
+                if st is not None and st.healthy():
+                    # the order's updates are pushed on the stream: react within moments, and still
+                    # ask Zerodha directly every 3 s in case an update is missed
+                    upd = st.wait_order(oid, 1.0)
+                    last = upd if (upd is not None and i % 3) else (self.kite.order_history(oid) or [{}])[-1]
+                else:
+                    self.sleep(1)
+                    last = (self.kite.order_history(oid) or [{}])[-1]
+            except Exception as e:  # noqa: BLE001 - a missed read: the order is still ours to work
+                self.log(f"Order {oid}: status not read: {e}")
+                continue
+            status = str(last.get("status", "")).upper()
+            if status == "COMPLETE":
+                self._track(tag, done=True)
+                return (int(last.get("filled_quantity") or qty), float(last.get("average_price") or price), oid, status,
+                        "", i)
+            if status in ("REJECTED", "CANCELLED"):
+                self._track(tag, done=True)
+                return (int(last.get("filled_quantity") or 0), float(last.get("average_price") or price), oid, status,
+                        str(last.get("status_message") or ""), i)
+            if i % 5 == 0 and i < seconds:   # follow the market
+                new = reprice(price)
+                if new and new != price:
+                    try:
+                        self.kite.modify_order(variety="regular", order_id=oid, price=new)
+                        price = new
+                        self.log(f"Order {oid}: re-priced to {price:.2f}")
+                    except Exception as e:  # noqa: BLE001
+                        self.log(f"Order {oid}: re-price failed: {e}")
+        last = self._confirm_cancel(oid, last)
+        status = str(last.get("status", "")).upper()
+        filled = int(last.get("filled_quantity") or 0)
+        avg = float(last.get("average_price") or price)
+        if status not in self.FINISHED:
+            self._track(tag, booked=filled)
+            raise Unconfirmed(f"{side} {qty} {sym}: order {oid} could not be confirmed cancelled ({filled} filled). "
+                              "Nothing more is sent for it until it is read, so it cannot fill twice.", filled, avg)
+        self._track(tag, done=True)
+        if status == "COMPLETE":
+            filled = filled or qty
+        return filled, avg, oid, ("COMPLETE" if status == "COMPLETE" else "TIMEOUT"), "", seconds
+
+    def _place_and_wait(self, sym: str, side: str, qty: int, quote: Quote, closing: bool = False, label: str = "",
+                        group: str = "", retry: bool = False) -> tuple[int, float, str]:
+        """Send one order and wait for it. Opening: the chase, then given up. Closing: the chase, then _close_rest
+        (retry: straight to _close_rest at its furthest step, for one short try). Raises Unconfirmed with what filled
+        if an order may still fill."""
+        if retry and closing:
+            return self._close_rest(sym, side, qty, 0, 0.0, "", "RETRY", "", label, group,
+                                    budget=2 * self.CLOSE_ROUND_SECONDS, start_top=True)
         first = price = self._limit(side, quote)
         market = self.s.order_type == "market"
         if market:   # one limit far enough through the market to fill at once (an exchange-safe "market" order)
-            through = price * (1 + self.s.max_chase_pct / 100 if side == "BUY" else 1 - self.s.max_chase_pct / 100)
-            ticks = round(through / self.tick, 6)
-            first = price = max(round((math.ceil(ticks) if side == "BUY" else math.floor(ticks)) * self.tick, 2), self.tick)
-        try:
-            oid = self.kite.place_order(variety="regular", exchange="NFO", tradingsymbol=sym, transaction_type=side,
-                                        quantity=qty, product="NRML", order_type="LIMIT", price=price,
-                                        validity="DAY", tag="algolab")
-        except Exception as e:  # noqa: BLE001
-            raise Halt(f"Zerodha refused the order {side} {qty} {sym}: {e}") from None
-        self.log(f"Order {oid}: {side} {qty} {sym} LIMIT {price:.2f}")
-        last = {}
-        for i in range(1, self.s.chase_seconds + 1):
-            st = self.stream
-            if st is not None and st.healthy():
-                # the order's updates are pushed on the stream: react within moments, and still
-                # ask Zerodha directly every 3 s in case an update is missed
-                upd = st.wait_order(oid, 1.0)
-                last = upd if (upd is not None and i % 3) else (self.kite.order_history(oid) or [{}])[-1]
-            else:
-                self.sleep(1)
-                last = (self.kite.order_history(oid) or [{}])[-1]
-            status = str(last.get("status", "")).upper()
-            if status == "COMPLETE":
-                return int(last.get("filled_quantity") or qty), float(last.get("average_price") or price), oid
-            if status in ("REJECTED", "CANCELLED"):
-                filled = int(last.get("filled_quantity") or 0)
-                if filled:
-                    return filled, float(last.get("average_price") or price), oid
-                raise Halt(f"Zerodha {status.lower()} {side} {qty} {sym}: {last.get('status_message') or ''}".strip())
-            if i % 5 == 0 and not market:   # follow the market
-                new = self._fresh_price(sym, side)
-                if new:
-                    new = self._limit(side, Quote(new, bid=new if side == "SELL" else None, ask=new if side == "BUY" else None))
-                    if abs(new - first) / first * 100 <= self.s.max_chase_pct and new != price:
-                        try:
-                            self.kite.modify_order(variety="regular", order_id=oid, price=new)
-                            price = new
-                            self.log(f"Order {oid}: re-priced to {price:.2f}")
-                        except Exception as e:  # noqa: BLE001
-                            self.log(f"Order {oid}: re-price failed: {e}")
-        try:
-            self.kite.cancel_order(variety="regular", order_id=oid)
-        except Exception:  # noqa: BLE001
-            pass
-        last = (self.kite.order_history(oid) or [last])[-1]
-        filled = int(last.get("filled_quantity") or 0)
-        if filled == 0:
-            raise Halt(f"{side} {qty} {sym} did not fill within {self.s.chase_seconds}s; the order was cancelled.")
-        return filled, float(last.get("average_price") or price), oid
+            first = price = self._tick_px(side, price * (1 + self.s.max_chase_pct / 100 if side == "BUY"
+                                                         else 1 - self.s.max_chase_pct / 100))
+        room = max(first * self.s.max_chase_pct / 100, self.MIN_CHASE_TICKS * self.tick) + 1e-9
 
-    def _place_protect(self, contract, sym, sold_px, qty) -> None:
+        def follow(cur):
+            if market:
+                return None
+            new = self._fresh_price(sym, side)
+            if not new:
+                return None
+            new = self._tick_px(side, new)
+            return new if abs(new - first) <= room else None
+
+        try:
+            filled, avg, oid, status, msg, _ = self._work(sym, side, qty, price, self.s.chase_seconds, follow, label, group)
+        except NotPlaced as e:
+            if not closing:
+                raise
+            self.log(f"{e}; trying again")
+            filled, avg, oid, status, msg = 0, 0.0, "", "ERROR", str(e)
+        if filled >= qty or (filled and not closing):
+            return min(filled, qty), avg, oid      # a part fill is booked; execute() then stops the session
+        if not closing:
+            if status in ("REJECTED", "CANCELLED"):
+                raise Halt(f"Zerodha {status.lower()} {side} {qty} {sym}: {msg}".strip())
+            raise Halt(f"{side} {qty} {sym} did not fill within {self.s.chase_seconds}s; the order was cancelled.")
+        return self._close_rest(sym, side, qty, filled, avg, oid, status, msg, label, group)
+
+    def _close_rest(self, sym, side, qty, filled, avg, oid, status, msg, label="", group="", budget=None,
+                    start_top=False) -> tuple[int, float, str]:
+        """A closing order that did not fill in full within chase_seconds: send what is left again, further through the
+        best price each 10 s round (CLOSE_STEPS, capped at close_max_through_pct and the circuit limit) for
+        close_retry_seconds (or `budget`). A step Zerodha rejects (e.g. a price band) is not tried again: the furthest
+        step is lowered below it. Every order is confirmed finished before the next is sent. Returns what filled in
+        all; raises Halt if nothing did, Unconfirmed (with what filled) if an order may still fill."""
+        buy = side == "BUY"
+        value = filled * avg
+        cap = self.s.close_max_through_pct
+        steps = [p for p in self.CLOSE_STEPS if p < cap] + [cap]
+        top = len(steps) - 1
+        budget = self.s.close_retry_seconds if budget is None else budget
+        if status != "RETRY":
+            why = f"{status.lower()} ({msg})" if msg else f"not filled in {self.s.chase_seconds}s"
+            self.log(f"Closing {side} {qty} {sym}: {why}, {filled} filled; sending the rest further through the market "
+                     f"(up to {cap:g}%, {budget}s)")
+        k = top if start_top else 0
+        spent, loops = 0, 0
+        while spent < budget and loops < 4 * budget:
+            loops += 1
+            left = qty - filled
+            if left <= 0:
+                break
+            pct = steps[min(k, top)]
+
+            def aim(pct=pct):
+                touch, band = self._touch(sym, side)
+                if not touch:
+                    return None
+                px = self._tick_px(side, touch * (1 + pct / 100 if buy else 1 - pct / 100))
+                if band:
+                    px = min(px, self._tick_px("SELL", band)) if buy else max(px, self._tick_px("BUY", band))
+                return px
+
+            px = aim()
+            if px is None:
+                self.log(f"Closing {sym}: no price from Zerodha; trying again")
+                self.sleep(1)
+                spent += 1
+                continue
+
+            def further(cur, aim=aim):   # only ever further through: a higher buy limit still fills at the best ask
+                new = aim()
+                return new if new is not None and (new > cur if buy else new < cur) else None
+
+            try:
+                f, a, oid2, st, m, used = self._work(sym, side, left, px, self.CLOSE_ROUND_SECONDS, further, label, group)
+            except NotPlaced as e:
+                self.log(f"Closing {sym}: {e}; trying again")
+                self.sleep(1)
+                spent += 1
+                continue
+            except Unconfirmed as e:
+                total = filled + e.filled
+                raise Unconfirmed(str(e), total, (value + e.filled * e.avg) / total if total else 0.0) from None
+            spent += used
+            oid = oid2
+            if f:
+                filled += f
+                value += f * a
+            if st in ("REJECTED", "CANCELLED") and not f:
+                self.log(f"Closing {sym}: Zerodha {st.lower()} the order at {px:.2f} ({m}); not going that far again")
+                top = max(0, min(k, top) - 1)
+                k = top
+            else:
+                k = min(k + 1, top)
+        if filled == 0:
+            raise Halt(f"{side} {qty} {sym} did not fill: tried {budget}s more, up to {cap:g}% through the best price; "
+                       "every order was cancelled.")
+        return min(filled, qty), value / filled, oid
+
+    def _place_protect(self, contract, sym, sold_px, qty, trigger: float | None = None) -> bool:
         if self.s.protect_mult <= 0:
-            return
-        trigger = round(math.ceil(round(sold_px * self.s.protect_mult / self.tick, 6)) * self.tick, 2)
+            return False
+        if trigger is None:
+            trigger = sold_px * self.s.protect_mult
+        trigger = round(math.ceil(round(trigger / self.tick, 6)) * self.tick, 2)
         limit = round(math.ceil(round(trigger * 1.1 / self.tick, 6)) * self.tick, 2)
         try:
             oid = self.kite.place_order(variety="regular", exchange="NFO", tradingsymbol=sym, transaction_type="BUY",
@@ -334,10 +675,29 @@ class LiveBroker(PaperBroker):
                                         trigger_price=trigger, validity="DAY", tag="algolab-stop")
         except Exception as e:  # noqa: BLE001
             self.notify("Protective stop NOT placed", f"{sym}: {e}. The short leg is unprotected at Zerodha.")
-            return
+            return False
         self.protect[contract.label] = str(oid)
         self.protect_level[contract.label] = trigger
         self.log(f"Protective stop {oid}: BUY {qty} {sym} trigger {trigger:.2f}")
+        return True
+
+    def _reprotect(self, contract, sym) -> None:
+        """A short leg that could not be bought back after its protective stop was taken off: put the stop back at
+        Zerodha for what is still held, at its old trigger, or REPROTECT_ABOVE x the price now if the market is
+        already past that (a buy stop must trigger above the market)."""
+        pos = self.positions.get(contract)
+        if self.s.mode != "live" or pos is None or pos.qty >= 0 or contract.label in self.protect:
+            return
+        if any(w.get("label") == contract.label and w.get("side") == "BUY" for w in self.working.values()):
+            return                               # a buy that may still fill: a stop as well could buy it twice
+        level = self.released.get(contract.label) or pos.avg_price * self.s.protect_mult
+        now_px = self._fresh_price(sym, "BUY")
+        if now_px:
+            level = max(level, now_px * self.REPROTECT_ABOVE)
+        if self._place_protect(contract, sym, pos.avg_price, abs(pos.qty), trigger=level):
+            self.released.pop(contract.label, None)
+            self.notify("Protective stop put back", f"{contract.label}: could not be bought back yet; a stop is back at "
+                        f"Zerodha (trigger {self.protect_level[contract.label]:.2f}) while Algo Lab keeps trying.")
 
     FOLLOW_EVERY = 5.0      # seconds between moves of one stop at Zerodha
     FOLLOW_MAX = 20         # moves per stop order (Zerodha limits changes to one order)
@@ -401,7 +761,9 @@ class LiveBroker(PaperBroker):
             self.notify("Protective stop not cancelled", msg)
             raise CancelFailed(msg)
         self.protect.pop(contract.label, None)
-        self.protect_level.pop(contract.label, None)
+        level = self.protect_level.pop(contract.label, None)
+        if level is not None and status == "CANCELLED":
+            self.released[contract.label] = level
         filled = int(last.get("filled_quantity") or 0)
         if status == "COMPLETE" or filled:
             pos = self.positions.get(contract)
@@ -482,7 +844,19 @@ class LiveBroker(PaperBroker):
         if hit:
             raise Halt("Protective stop filled at Zerodha for " + ", ".join(hit))
 
-    def execute(self, now, contract, side, qty, quote, reason="", group=""):
+    def _book_unconfirmed(self, now, contract, side, e, reason, group, sym, closing) -> None:
+        if e.filled:
+            cost = self.schedule.at(now).order_cost(side, e.avg * e.filled)
+            self._apply(now, contract, side, e.filled, round(e.avg, 2), cost, reason, group, "live")
+        if closing:
+            self._reprotect(contract, sym)          # skipped while the buy may still fill
+        elif side == "SELL" and e.filled:
+            self._resize_protect(contract, sym)     # a leg that already had a stop
+            if contract.label not in self.protect:
+                self._place_protect(contract, sym, e.avg, abs(self.positions[contract].qty))
+        self.notify("Order not confirmed at Zerodha", f"{contract.label}: {e}")
+
+    def execute(self, now, contract, side, qty, quote, reason="", group="", retry=False):
         closing = self._closing(contract, side)
         self._guard(now, contract, side, qty, closing)
         sym = self.symbol_of(contract)
@@ -502,10 +876,23 @@ class LiveBroker(PaperBroker):
             if self._cancel_protect(contract, now):
                 return self.fills[-1]      # the protective stop already bought it back
             qty = min(qty, abs(self.positions[contract].qty))   # a stop that filled in part leaves less to buy
-        filled, avg, oid = self._place_and_wait(sym, side, qty, quote)
+        try:
+            filled, avg, oid = self._place_and_wait(sym, side, qty, quote, closing=closing, label=contract.label,
+                                                    group=group, retry=retry)
+        except Unconfirmed as e:                    # may still fill: it stays in `working`; book what did fill
+            self._book_unconfirmed(now, contract, side, e, reason, group, sym, closing)
+            raise
+        except Halt:
+            if closing:
+                self._reprotect(contract, sym)      # its stop was taken off for this buy-back: put it back
+            raise
         cost = self.schedule.at(now).order_cost(side, avg * filled)
         fill = self._apply(now, contract, side, filled, round(avg, 2), cost, reason, group, "live")
         self.notify(f"Algo Lab: {side} {filled} {sym}", f"at {avg:.2f} ({reason}); order {oid}")
+        if closing:
+            self._reprotect(contract, sym)          # only if part of a short leg is still held
+            if contract not in self.positions:
+                self.released.pop(contract.label, None)
         if filled < qty:
             raise Halt(f"Only {filled} of {qty} {sym} filled.")
         if side == "SELL" and not closing:
@@ -547,7 +934,8 @@ class LiveBroker(PaperBroker):
         from concurrent.futures import ThreadPoolExecutor
         results: dict = {}
         with ThreadPoolExecutor(max_workers=max(1, len(todo))) as pool:
-            futs = {i: pool.submit(self._place_and_wait, plan[i][6], plan[i][1], plan[i][2], plan[i][3]) for i in todo}
+            futs = {i: pool.submit(self._place_and_wait, plan[i][6], plan[i][1], plan[i][2], plan[i][3], plan[i][7],
+                                   plan[i][0].label, plan[i][5]) for i in todo}
             for i, f in futs.items():
                 try:
                     results[i] = f.result()
@@ -559,11 +947,19 @@ class LiveBroker(PaperBroker):
             r = results[i]
             if isinstance(r, BaseException):
                 first_error = first_error or r
+                if isinstance(r, Unconfirmed):
+                    self._book_unconfirmed(now, contract, side, r, reason, group, sym, closing)
+                elif closing:
+                    self._reprotect(contract, sym)
                 continue
             filled, avg, oid = r
             cost = self.schedule.at(now).order_cost(side, avg * filled)
             fills[i] = self._apply(now, contract, side, filled, round(avg, 2), cost, reason, group, "live")
             self.notify(f"Algo Lab: {side} {filled} {sym}", f"at {avg:.2f} ({reason}); order {oid}")
+            if closing:
+                self._reprotect(contract, sym)
+                if contract not in self.positions:
+                    self.released.pop(contract.label, None)
             if filled < qty:
                 first_error = first_error or Halt(f"Only {filled} of {qty} {sym} filled.")
             if side == "SELL" and not closing:
@@ -571,6 +967,82 @@ class LiveBroker(PaperBroker):
         if first_error is not None:
             raise first_error
         return fills
+
+
+    def retry_close(self, now, contract, quote, reason="Square-off (retry)", quick=False):
+        """Close a leg for a square-off, or again after one that failed, sending only what Zerodha still holds for this
+        session, so a retry can never open a new position:
+          - an earlier order that may still fill is read (and its fill booked) first; still working: nothing is sent
+          - any other order working at Zerodha on the symbol (e.g. one placed in Kite): nothing is sent
+          - a leg closed in Kite or by its stop meanwhile is booked as closed and not traded again
+          - Zerodha's position on the other side, or larger: Blocked (after two reads in a row: positions lag)
+        quick: one short try straight at the furthest step (the closing-only retries, so other sessions are not held up).
+        Returns the fill, or None if nothing needed sending. Raises Halt if it is still not closed."""
+        pos = self.positions.get(contract)
+        if pos is None:
+            return None
+        if self.s.mode != "live":
+            return self.execute(now, contract, "BUY" if pos.qty < 0 else "SELL", abs(pos.qty), quote, reason, pos.group)
+        if self.kite is None:
+            raise Halt("No Zerodha connection.")
+        self.reconciled = True          # the per-symbol check below replaces the whole-account one here
+        sym = self.symbol_of(contract)
+        left = self.settle_working(now, contract.label)
+        if left:
+            raise Halt("; ".join(left) + "; nothing more sent")
+        pos = self.positions.get(contract)
+        if pos is None:
+            return self.fills[-1]
+        try:
+            others_open = [o for o in self._open_orders(sym)]
+        except Exception as e:  # noqa: BLE001
+            raise Halt(f"Zerodha's order book not read ({e}); nothing sent") from None
+        if others_open:
+            ids = ", ".join(str(o.get("order_id")) for o in others_open)
+            raise Halt(f"order {ids} is working at Zerodha for {sym} (e.g. placed in Kite); nothing more sent, so "
+                       "the two cannot both fill")
+
+        def held_now():
+            held = self._zerodha_net().get(sym, 0) - (self.others() or {}).get(sym, 0)
+            if held * pos.qty < 0 or abs(held) > abs(pos.qty):   # nothing touched: its stop stays
+                msg = (f"{contract.label}: Zerodha holds {held:+d} for this session, the session {pos.qty:+d}. Not "
+                       "traded, so nothing can be doubled.")
+                if sym in self._held_odd:
+                    raise Blocked(msg + " Check Kite.")
+                self._held_odd.add(sym)
+                raise Halt(msg + " Reading again at the next try.")
+            self._held_odd.discard(sym)
+            return held
+
+        held_now()
+        if pos.qty < 0 and self._cancel_protect(contract, now):
+            return self.fills[-1]               # its stop bought it back meanwhile
+        try:
+            pos = self.positions[contract]
+            held = held_now()                   # read again: the stop is off now, so this is final
+            side = "BUY" if pos.qty < 0 else "SELL"
+            gone = abs(pos.qty) - abs(held)
+            if gone:   # closed outside Algo Lab: booked at the price now (Zerodha's own fill price is in Kite)
+                if (self.others() or {}).get(sym):
+                    raise Blocked(f"{contract.label}: Zerodha holds {gone} less than this session and another live "
+                                  "session holds the same contract (its stop may have filled): whose it is cannot be "
+                                  "told. Not traded. Check Kite.")
+                px = self._limit(side, quote)
+                self._apply(now, contract, side, gone, px, self.schedule.at(now).order_cost(side, px * gone),
+                            "Closed outside Algo Lab (Kite)", pos.group, "live")
+                msg = f"{contract.label}: {gone} closed outside Algo Lab (Kite); booked at {px:.2f}, Kite has the real price"
+                self.log(msg)
+                self.notify("Algo Lab: leg closed outside", msg)
+                if contract not in self.positions:
+                    self.released.pop(contract.label, None)
+                    return self.fills[-1]
+            pos = self.positions[contract]
+            return self.execute(now, contract, side, abs(pos.qty), quote, reason, pos.group, retry=quick)
+        except Unconfirmed:
+            raise
+        except Exception:
+            self._reprotect(contract, sym)      # whatever went wrong after its stop came off: put it back
+            raise
 
 
 def settings_summary(s: LiveSettings) -> str:

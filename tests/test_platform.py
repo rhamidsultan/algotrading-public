@@ -835,19 +835,29 @@ def test_premium_strangle_backtests_and_exits_by_expiry():
 
 
 # ---- live orders (fake Zerodha) -----------------------------------------------------------
+class _OrderBook(dict):
+    """The fake's orders by id; called like Kite's orders(), it gives the day's order book (the fields read)."""
+
+    def __call__(self):
+        return [{"order_id": o["order_id"], "tradingsymbol": o["sym"], "transaction_type": o["side"], "tag": o["tag"],
+                 "order_type": o["type"], "status": o["status"], "filled_quantity": o["filled_quantity"]}
+                for o in self.values()]
+
+
 class FakeOrders(FakeKite):
     """FakeKite plus an order book. `mode` decides what happens to the next LIMIT order."""
 
     def __init__(self, expiry, mode="fill"):
         super().__init__(expiry)
-        self.mode, self.orders, self.n, self.history_calls = mode, {}, 0, 0
+        self.mode, self.orders, self.n, self.history_calls = mode, _OrderBook(), 0, 0
 
     def place_order(self, variety, exchange, tradingsymbol, transaction_type, quantity, product, order_type,
                     price=None, trigger_price=None, validity=None, tag=None, **k):
         self.n += 1
         oid = str(self.n)
         o = {"order_id": oid, "sym": tradingsymbol, "side": transaction_type, "qty": quantity, "type": order_type,
-             "price": price, "trigger": trigger_price, "product": product, "filled_quantity": 0, "average_price": 0}
+             "price": price, "trigger": trigger_price, "product": product, "filled_quantity": 0, "average_price": 0,
+             "tag": tag}
         if order_type == "SL":
             o["status"] = "TRIGGER PENDING"
         elif self.mode == "fill":

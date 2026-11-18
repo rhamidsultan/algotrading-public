@@ -3,6 +3,28 @@
 Update this in every pull request that changes what is live, data coverage or work in progress.
 Newest information first within each section.
 
+## Live closes never give up (10 Nov 2026, pull request "close-never-gives-up")
+
+- Why: 9 Nov (expiry day) intraday_strangle-7's exit BUY 65 NIFTY 24900 CE did not fill in the 30 s chase (capped at
+  5% from the first price), the square-off repeated the same chase, and the session stopped with "close these in Kite
+  now", the leg's protective stop already taken off.
+- Closing orders (`algolab/live.py`): after `chase_seconds`, what is left is re-sent further through the best price
+  (2, 5, 10, 20, 30% in 10 s rounds; `close_max_through_pct` default 30, never past the circuit limit) for
+  `close_retry_seconds` (default 60). A step Zerodha rejects is not tried again.
+- Never two orders at once for a leg: each order has its own tag and is written to `runtime/sessions/<id>/working.json`
+  before it is sent; it is confirmed finished before the next one. One that may still fill (cancel not confirmed, answer
+  lost) is read and its fill booked before anything else is sent for that leg, also after a restart.
+- Every order may follow the market at least 3 ticks (5% of a cheap option is less than a tick: it was never re-priced).
+- A leg that still cannot be closed gets its protective stop back (old trigger, or 1.2x the price if higher), except
+  while a buy may still fill. At start the engine also puts back any missing stop on a short leg.
+- The session then goes "closing only" (`algolab/paper.py`): a short try every 30 s, also after a restart (same day),
+  sending only what Zerodha still holds for it. Nothing is sent if another order works on the symbol (e.g. from Kite);
+  a leg closed in Kite is booked as closed (alert); a position that does not fit (twice in a row) stops it untouched.
+  Alert when closed and every 10 tries; at 15:25 IST, or on Stop, it ends and asks for Kite, the stop staying.
+- Known limit: the first square-off still closes legs one after another (up to ~90 s each); other sessions wait.
+- Not changed: the Positions page's manual close (30 s, 5%).
+- Order-safety review (independent agent, 10 Nov): FAIL (2 Critical, 5 High) → fixes → PASS WITH FIXES (2 High) → fixes → PASS (2 Low, fixed).
+
 ## Positions page (29 Oct 2026, pull request "positions-page")
 
 - Live › Positions (`/positions`, owner only, `server/portfolio/positions_panel.py`): open Zerodha positions with live
