@@ -49,6 +49,11 @@ class Strategy:
     def on_bar(self, ctx) -> None:  # called once per bar / live poll
         raise NotImplementedError
 
+    def on_outside_close(self, ctx, contract, qty: int) -> None:
+        """Live: `qty` of `contract` was squared off outside Algo Lab (by hand in Kite) and is booked closed.
+        The other legs are kept. The default needs nothing: ctx.close() only closes what is held. A strategy that
+        re-enters or rolls a leg overrides this so the leg Hamid closed is not traded again in that trade."""
+
     def get_state(self) -> dict:
         return {}
 

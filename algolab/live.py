@@ -227,6 +227,9 @@ class LiveBroker(PaperBroker):
         self.stream = None
         self.others = lambda: {}                   # Zerodha symbol -> qty held by the account's OTHER live sessions
         self._mismatch_prev: set = set()           # symbols that differed at the last position check
+        self.synced: dict[str, int] = {}           # Kite order id -> units of it already booked as a close in Kite
+        self._sync_seen: set = set()               # symbols seen with less at Zerodha, no Kite order found yet
+        self.outside: list = []                    # (contract, units) closed in Kite, for the strategy (on_outside_close)
 
     # wiring to the live feed (its Zerodha client and contract list)
     def attach(self, feed) -> None:
@@ -243,6 +246,7 @@ class LiveBroker(PaperBroker):
         d = super().to_dict()
         d["live"] = {"protect": self.protect, "protect_level": self.protect_level, "orders_today": self.orders_today,
                      "protect_day": self.protect_day, "renew": sorted(self.renew), "pending_stop": self.pending_stop,
+                     "synced": dict(list(self.synced.items())[-200:]), "empty_sync_at": self._empty_sync_at,
                      "released": self.released, "working": self.working, "contracts": {k: c.to_dict() for k, c in self.contracts.items()}}
         return d
 
@@ -254,6 +258,8 @@ class LiveBroker(PaperBroker):
         self.released = {k: float(v) for k, v in (live.get("released") or {}).items()}
         self.protect_day = dict(live.get("protect_day") or {})
         self.renew = set(live.get("renew") or [])
+        self.synced = {str(k): int(v) for k, v in (live.get("synced") or {}).items()}
+        self._empty_sync_at = float(live.get("empty_sync_at") or 0.0)   # a Sync pressed once (a stopped card restarts)
         self.pending_stop = {k: (v if isinstance(v, dict) else {"tag": str(v), "at": 0.0})
                              for k, v in (live.get("pending_stop") or {}).items()}
         self.working = {k: dict(v) for k, v in (live.get("working") or {}).items() if isinstance(v, dict)}
@@ -280,6 +286,7 @@ class LiveBroker(PaperBroker):
         if left:
             raise Halt("Orders sent before a restart are still working at Zerodha (" + "; ".join(left) + "). Nothing "
                        "more was sent.")
+        self.sync_outside(now)                        # legs squared off in Kite meanwhile, with their Kite order
         net = self._zerodha_net()
         others = self.others() or {}
         diffs, bad = [], set()
@@ -292,13 +299,17 @@ class LiveBroker(PaperBroker):
                 bad.add(c)
                 diffs.append(f"{c.label}: ours {pos.qty}" + (f" + other live sessions {other}" if other else "")
                              + f", Zerodha {net.get(sym, 0) if sym else 'not listed'}")
-        self._renew_day_stops(day, skip=bad, tell=not diffs)
+        if not self.sync_only:                        # a sync-only run places no new orders
+            self._renew_day_stops(day, skip=bad, tell=not diffs)
         if diffs:
             naked = [c.label for c in self.positions if self.positions[c].qty < 0 and not self._expired(c, day)
                      and (c.label not in self.protect or (self.protect_day.get(c.label) or "") < day)]
             raise Blocked("Positions differ from Zerodha (" + "; ".join(diffs) + "). Nothing was sent. "
                           + (f"NO protective stop at Zerodha: {', '.join(naked)}. " if naked else "")
-                          + "Square off or fix them in Kite, reset this session's account, then start again.")
+                          + "A leg you squared off in Kite today is synced by itself; one closed on an earlier day "
+                          "(or with no order of yours in Kite) is booked when you press Sync on the card. Anything "
+                          "else (more at Zerodha, the other way round, a contract another live session also holds): "
+                          "fix it in Kite, then Sync.")
         self.reconciled, self.reconciled_on = True, day
 
     def _renew_day_stops(self, day: str, skip=(), tell: bool = True) -> None:
@@ -338,6 +349,180 @@ class LiveBroker(PaperBroker):
                 net[p["tradingsymbol"]] = net.get(p["tradingsymbol"], 0) + int(p.get("quantity", 0))
         return net
 
+    KITE_CLOSE = "Closed in Kite"
+
+    def _kite_closes(self, sym: str, side: str, want: int, since=None) -> tuple[dict, int, float]:
+        """Orders in today's order book that closed up to `want` units of `sym`: filled, `side`, NRML, not sent by Algo
+        Lab (its tags start with "algolab"), placed after the leg was opened (`since`), not booked before by any live
+        session (self.synced, shared by the account's live sessions). Newest first.
+        Returns ({order id: units used}, units found, their average price)."""
+        used, got, value = {}, 0, 0.0
+        book = self.kite.orders() or []
+        when = lambda o: str(o.get("exchange_timestamp") or o.get("order_timestamp") or "")  # noqa: E731
+        after = since.strftime("%Y-%m-%d %H:%M:%S") if hasattr(since, "strftime") else ""
+        for o in sorted(book, key=when, reverse=True):
+            if got >= want:
+                break
+            oid = str(o.get("order_id"))
+            if (str(o.get("tradingsymbol")) != sym or str(o.get("transaction_type", "")).upper() != side
+                    or str(o.get("product", "NRML")).upper() != "NRML" or str(o.get("tag") or "").startswith("algolab")):
+                continue
+            if after and when(o) and when(o)[:19] < after:
+                continue                                   # before this leg was opened: not its close
+            left = int(o.get("filled_quantity") or 0) - self.synced.get(oid, 0)
+            px = float(o.get("average_price") or 0)
+            if left <= 0 or px <= 0:
+                continue
+            q = min(left, want - got)
+            used[oid], got, value = q, got + q, value + q * px
+        return used, got, (value / got if got else 0.0)
+
+    SYNC_RECHECK = 2.0      # seconds between the two reads of Zerodha's positions before a Sync books an estimate
+    EMPTY_SYNC_CONFIRM = 600.0   # Zerodha shows no positions: a Sync books the legs only if pressed again this soon
+    _empty_sync_at = 0.0
+    sync_only = False       # a stopped session started only to sync (Sync on its card): no new stops are placed
+
+    def _less_at_zerodha(self, c, net: dict, others: dict) -> int | None:
+        """Zerodha's net for this leg (less the other live sessions) if it is a square-off of it, in full or in part,
+        that can be booked now; None if it matches or is something else (left to the position check)."""
+        pos, sym = self.positions.get(c), self.symbol_of(c)
+        if pos is None or not sym:
+            return None
+        held = net.get(sym, 0) - others.get(sym, 0)
+        if held == pos.qty:
+            self._sync_seen.discard(sym)
+            return None
+        if held * pos.qty < 0 or abs(held) > abs(pos.qty) or others.get(sym):
+            return None                                    # not a square-off: the position check decides
+        if c.label in self.pending_stop or any(w.get("sym") == sym for w in self.working.values()) or self._open_orders(sym):
+            return None                                    # an order still working there (any, also one placed in Kite)
+        return held
+
+    def sync_outside(self, now, explicit: bool = False, only=None) -> list[str]:
+        """Legs this session holds that Zerodha now holds less of: squared off (in full or in part) by hand in Kite or
+        on the Positions page. Booked closed at the price of that Kite order (placed after the leg was opened, not
+        booked before). Positions are read twice and must agree; an empty list is never taken as "all closed".
+        Without a matching order nothing is booked by itself (the position check then stops the session, as before):
+        only a Sync from the card (`explicit`) books it, at the price now, marked "estimated".
+        The leg's protective stop is read first: if it is what bought the leg, that is a stop fill (Halt, as at any
+        check). Otherwise it is taken off, and the rest of a part-closed leg gets a stop for its size. The strategy
+        hears of it (self.outside: on_outside_close) and keeps the other legs. Not synced: Zerodha holding more or
+        the other way round, another live session in the same contract, any order still working in it.
+        Returns one line per leg booked."""
+        if self.s.mode != "live" or self.kite is None or not self.positions:
+            return []
+        day = self._today(now)
+        net = self._zerodha_net()
+        if not net:                                        # no positions at all: Zerodha may not have answered in full
+            if not explicit:
+                return []
+            if _time.time() - self._empty_sync_at > self.EMPTY_SYNC_CONFIRM:   # a Sync: only when pressed again
+                self._empty_sync_at = _time.time()
+                self.log("Sync: Zerodha shows no positions at all, so nothing was booked. If every leg of this "
+                         f"session really is closed, press Sync again within {self.EMPTY_SYNC_CONFIRM // 60:.0f} minutes.")
+                return []
+            self._empty_sync_at = 0.0
+        others = self.others() or {}
+        legs = [c for c in ([only] if only is not None else list(self.positions))
+                if c in self.positions and not self._expired(c, day) and self._less_at_zerodha(c, net, others) is not None]
+        if not legs:
+            return []
+        if explicit:
+            self.sleep(self.SYNC_RECHECK)
+        net2 = self._zerodha_net()                         # read again: one odd answer is never booked
+        done = []
+        for c in legs:
+            pos, sym = self.positions.get(c), self.symbol_of(c)
+            if pos is None:
+                continue
+            held = self._less_at_zerodha(c, net2, others)
+            if held is None or held != net.get(sym, 0) - others.get(sym, 0):
+                continue                                   # changed between the reads: looked at again next time
+            side = "BUY" if pos.qty < 0 else "SELL"
+            gone = abs(pos.qty) - abs(held)
+            oid = self.protect.get(c.label) if pos.qty < 0 else None
+            stop = self._order_last(oid, self.protect_day.get(c.label), day) if oid else {}
+            gone_stop = str(stop.get("status", "")).upper() == "GONE"
+            if not gone_stop and (str(stop.get("status", "")).upper() == "COMPLETE" or int(stop.get("filled_quantity") or 0)):
+                self._cancel_protect(c, now)               # its own stop bought it: booked as the stop's fill
+                raise Halt(f"Protective stop filled at Zerodha for {c.label}")
+            used, got, avg = self._kite_closes(sym, side, gone, since=pos.opened_at)
+            if got < gone and not explicit:
+                if sym not in self._sync_seen:
+                    self._sync_seen.add(sym)
+                    self.log(f"{c.label}: Zerodha holds {held:+d}, the session {pos.qty:+d}, and Kite's order book has "
+                             "no order of yours that closed it" + (" (its stop of an earlier day may have filled)" if gone_stop else "")
+                             + ". Not booked by itself: if you closed it, press Sync on the card (booked at the price now).")
+                continue
+            self._sync_seen.discard(sym)
+            note = ""
+            if pos.qty < 0:                                # its stop first: never left live on a leg closed by hand
+                if gone_stop:
+                    self._drop_stop(c.label)               # ended with an earlier day
+                    if got < gone:
+                        note = " (its stop of an earlier day may have bought it: check the price)"
+                n = len(self.fills)
+                if self._cancel_protect(c, now) or len(self.fills) > n:
+                    raise Halt(f"Protective stop filled at Zerodha for {c.label}")
+            est = None
+            if got < gone:
+                est = self._fresh_price(sym, side) or (pos.avg_price if pos.avg_price else None)
+            px = (avg * got + (est or 0.0) * (gone - got)) / gone if (got or est) else pos.avg_price
+            px = round(px, 2)
+            estimated = got < gone
+            why = self.KITE_CLOSE + (" (price estimated)" if estimated else "")
+            self._apply(now, c, side, gone, px, self.schedule.at(now).order_cost(side, px * gone), why,
+                        pos.group, "kite")
+            for k, q in used.items():
+                self.synced[k] = self.synced.get(k, 0) + q
+            if c in self.positions:
+                if self.positions[c].qty < 0:
+                    self._reprotect(c, sym)                # the rest of the leg keeps a stop for its size
+            else:
+                self.released.pop(c.label, None)
+            self.outside.append((c, gone))
+            msg = (f"{c.label}: {gone} squared off in Kite, booked at {px:.2f}"
+                   + (" (Kite order " + ", ".join(used) + ")" if used and not estimated else "")
+                   + (" - price ESTIMATED (no Kite order of yours found): check the exit price" if estimated else "")
+                   + note)
+            self.log(msg)
+            self.notify("Algo Lab: leg squared off in Kite", msg)
+            done.append(msg)
+        return done
+
+    def _closing_still_held(self, now, contract) -> None:
+        """Before a closing order: Zerodha must still hold the leg. Squared off in Kite a moment ago (before the next
+        check): booked from its Kite order and nothing is sent; no order found yet: Blocked, nothing sent (a
+        buy-back would open a long). Its stop having filled is left to the cancel that follows (booked as the stop's)."""
+        pos, sym = self.positions.get(contract), self.symbol_of(contract)
+        if pos is None or not sym:
+            return
+        for attempt in (1, 2):
+            held = self._zerodha_net().get(sym, 0) - (self.others() or {}).get(sym, 0)
+            if held == pos.qty or held * pos.qty < 0 or abs(held) > abs(pos.qty):
+                return                                     # matches, or something else: the checks decide
+            if attempt == 1:
+                self.sleep(2)                              # positions can lag a fill by a moment: read again
+        oid = self.protect.get(contract.label) if pos.qty < 0 else None
+        gone_stop = False
+        if oid:
+            stop = self._order_last(oid, self.protect_day.get(contract.label), self._today(now))
+            st = str(stop.get("status", "")).upper()
+            if st != "GONE" and (st == "COMPLETE" or int(stop.get("filled_quantity") or 0)):
+                return                                     # its stop bought it: the cancel books that fill
+            gone_stop = st == "GONE"
+        for attempt in range(3):                           # Kite's order book can be a few seconds behind
+            self.sync_outside(now, only=contract)
+            if contract not in self.positions or abs(self.positions[contract].qty) <= abs(held) or attempt == 2:
+                break
+            self.sleep(2)
+        pos = self.positions.get(contract)
+        if pos is not None and abs(pos.qty) > abs(held):
+            raise Blocked(f"{contract.label}: Zerodha holds {held:+d} for this session, the session {pos.qty:+d} ("
+                          + ("its protective stop from an earlier day is no longer at Zerodha: it may have filled"
+                             if gone_stop else "squared off in Kite?")
+                          + "). Not traded, so no new position can be opened. If you closed it, press Sync on the card.")
+
     def check_positions(self, now) -> None:
         """While trading, every POSITIONS_EVERY s: Zerodha's net NRML position in each contract this session holds must
         equal its own legs plus the other live sessions' legs. A difference seen at two checks in a row (so a
@@ -346,6 +531,7 @@ class LiveBroker(PaperBroker):
         once a day; they do not stop the session (the Positions page keeps manual legs there too)."""
         if self.s.mode != "live" or self.kite is None:
             return
+        self.sync_outside(now)                    # legs squared off by hand in Kite: booked, not a mismatch
         net = self._zerodha_net()
         others = self.others() or {}
         mine: dict = {}
@@ -366,8 +552,10 @@ class LiveBroker(PaperBroker):
             self.log("Position check: differs from Zerodha (" + "; ".join(diffs) + "); checking again in a minute")
         if repeat:
             raise Blocked("Positions differ from Zerodha at two checks in a row (" + "; ".join(diffs) + "). Stopped "
-                          "without sending anything; protective stops at Zerodha stay. Fix it in Kite, then reset "
-                          "this session's account.")
+                          "without sending anything; protective stops at Zerodha stay. A leg you squared off in Kite "
+                          "with no order of yours found (or closed on an earlier day): press Sync on the card. "
+                          "Anything else (more at Zerodha, the other way round, a contract another live session also "
+                          "holds): fix it in Kite, then Sync.")
         day = now.date().isoformat()
         for sym, q in net.items():
             if q and sym not in mine and not others.get(sym) and (day, sym) not in LiveBroker._unowned_told:
@@ -1204,6 +1392,8 @@ class LiveBroker(PaperBroker):
         """Short legs whose stop must be placed again: try now (at each check, and at each closing-only retry). Zerodha
         must still hold the leg first (seen twice if not: then dropped, with an alert: the session's position check
         stops it). tell: alert once if it cannot be placed yet (False when the session is about to stop)."""
+        if self.sync_only:
+            return                                         # a sync-only run sends no new orders
         day = self._day or ist_now().date().isoformat()
         for label in sorted(self.renew):
             c = next((c for c in self.positions if c.label == label), None)
@@ -1282,6 +1472,12 @@ class LiveBroker(PaperBroker):
         if self.kite is None:
             raise Halt("No Zerodha connection.")
         self.reconcile(now)
+        if closing:                        # squared off in Kite since the last check: booked, nothing sent
+            self._closing_still_held(now, contract)
+            pos = self.positions.get(contract)
+            if pos is None:
+                return next((f for f in reversed(self.fills) if f.contract == contract.label), None)
+            qty = min(qty, abs(pos.qty))
         if closing and side == "BUY":
             if self._cancel_protect(contract, now):
                 return self.fills[-1]      # the protective stop already bought it back
@@ -1330,16 +1526,29 @@ class LiveBroker(PaperBroker):
             self.contracts[contract.label] = contract
             plan.append((contract, side, qty, quote, reason, group, sym, closing))
         self.reconcile(now)
+        synced = {}                        # closing legs the check just synced (squared off in Kite): nothing to send
+        for i, (contract, side, qty, quote, reason, group, sym, closing) in enumerate(plan):
+            if closing:
+                self._closing_still_held(now, contract)
+                pos = self.positions.get(contract)
+                if pos is None:
+                    synced[i] = next((f for f in reversed(self.fills) if f.contract == contract.label), None)
+                elif abs(pos.qty) < qty:
+                    plan[i] = (contract, side, abs(pos.qty), quote, reason, group, sym, closing)
         day = self._today(now)
-        for contract, side, qty, quote, reason, group, sym, closing in plan:   # before any stop is taken off: a
+        for i, (contract, side, qty, quote, reason, group, sym, closing) in enumerate(plan):   # before any stop is taken off: a
+            if i in synced:
+                continue
             oid = self.protect.get(contract.label)                              # leg whose stop ended with an earlier
             if closing and side == "BUY" and oid:                               # day must still be held at Zerodha
                 if str(self._order_last(oid, self.protect_day.get(contract.label), day).get("status")) == "GONE":
                     self._still_held(contract)
-        fills: list = [None] * len(plan)
+        fills: list = [synced.get(i) for i in range(len(plan))]
         todo, off = [], []
         try:
             for i, (contract, side, qty, quote, reason, group, sym, closing) in enumerate(plan):
+                if i in synced:
+                    continue
                 if closing and side == "BUY":
                     if self._cancel_protect(contract, now):
                         fills[i] = self.fills[-1]   # the protective stop already bought it back
@@ -1461,10 +1670,16 @@ class LiveBroker(PaperBroker):
                     raise Blocked(f"{contract.label}: Zerodha holds {gone} less than this session and another live "
                                   "session holds the same contract (its stop may have filled): whose it is cannot be "
                                   "told. Not traded. Check Kite.")
-                px = self._limit(side, quote)
+                used, got, avg = self._kite_closes(sym, side, gone, since=pos.opened_at)
+                px = round((avg * got + self._limit(side, quote) * (gone - got)) / gone, 2)
+                why = self.KITE_CLOSE + ("" if got >= gone else " (price estimated)")
                 self._apply(now, contract, side, gone, px, self.schedule.at(now).order_cost(side, px * gone),
-                            "Closed outside Algo Lab (Kite)", pos.group, "live")
-                msg = f"{contract.label}: {gone} closed outside Algo Lab (Kite); booked at {px:.2f}, Kite has the real price"
+                            why, pos.group, "kite")
+                for oid, q in used.items():
+                    self.synced[oid] = self.synced.get(oid, 0) + q
+                self.outside.append((contract, gone))
+                msg = (f"{contract.label}: {gone} squared off in Kite; booked at {px:.2f}"
+                       + ("" if got >= gone else " - price ESTIMATED (no Kite order found): check the exit price"))
                 self.log(msg)
                 self.notify("Algo Lab: leg closed outside", msg)
                 if contract not in self.positions:

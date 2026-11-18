@@ -4,6 +4,29 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Legs squared off in Kite are synced (18 Nov 2026, pull request "kite-sync")
+
+- Why: a live leg squared off by hand in Kite (or the Positions page) stopped the session ("Positions differ from
+  Zerodha") and it could only be reset; after a restart the strategy also exited its other leg ("A leg is missing").
+- Now (`algolab/live.py` `sync_outside`): at the minute check (and the morning check) a leg Zerodha holds less of
+  (all or part) is booked at the price of Hamid's own Kite order: NRML, no Algo Lab tag, placed after the leg was
+  opened, not booked before by any live session. Reason "Closed in Kite"; its stop is cancelled, the rest of a
+  part-closed leg gets a new stop. Positions are read twice and must agree; an empty answer never counts as closed.
+- No such order (closed on an earlier day, or Zerodha's order book is behind): nothing is booked by itself; the
+  session stops as before ("press Sync"). **Sync** on the card then books it at the price now, "Closed in Kite (price
+  estimated)", after reading positions twice. If Zerodha shows no positions at all (every leg closed on an earlier
+  day, or a bad answer), the first press books nothing: press Sync again within 10 minutes.
+- A strategy exit right after a square-off in Kite (before the next check) sends nothing: booked from the Kite order,
+  or Blocked if none is found (a buy-back would open a long).
+- Not synced (the position check stops the session): Zerodha holds more than Algo Lab, or the other way round; a
+  contract another live session also holds; any order still working on it (also one of yours in Kite). A stop that
+  filled stays a stop fill (the session halts and squares off, also if the stop was changed to MARKET in Kite).
+- The strategy keeps its other legs: premium_strangle keeps the cycle, intraday_strangle does not re-enter that leg
+  (`Strategy.on_outside_close`). Alert "Algo Lab: leg squared off in Kite".
+- Live card: **Sync** button (owner only). Running: syncs at once (refused while it is still closing its legs).
+  Stopped: started only to sync; it sends no trades and places no new stops (only a stop resized for the rest of a
+  part-closed leg), never squares off, and stops again.
+
 ## Updates come from the public repo (18 Nov 2026, pull request "updates-from-public")
 
 - GitHub Actions stopped running on the private repo (billing), so work moved to this public repo (main = snapshot
@@ -12,6 +35,7 @@ Newest information first within each section.
 - `deploy/update_source.sh` (run by every update) records `update_repo` (public, https) and `repo` (deploy key: the
   IBKR snapshot, still from the private repo's `ibkr-snapshot` branch, and updates from a private repo). The server's
   copy follows a new update address (`git remote set-url`).
+
 ## Legs held overnight close the next day (17 Nov 2026, pull request "live-next-day-stops", needs 134)
 
 - Why: protective stops are DAY orders. The morning after a short leg was held overnight (premium_strangle,

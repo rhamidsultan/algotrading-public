@@ -65,10 +65,12 @@ class NextDay(FakeOrders):
         for o in list(self.old.values()):
             if o["filled_quantity"]:
                 held[o["sym"]] = held.get(o["sym"], 0) + (o["filled_quantity"] if o["side"] == "BUY" else -o["filled_quantity"])
+        today = set()
         for p in super().positions()["net"]:
             held[p["tradingsymbol"]] = held.get(p["tradingsymbol"], 0) + p["quantity"]
-        return {"net": [{"tradingsymbol": s, "exchange": "NFO", "product": "NRML", "quantity": q}
-                        for s, q in held.items() if q]}
+            today.add(p["tradingsymbol"])
+        return {"net": [{"tradingsymbol": s, "exchange": "NFO", "product": "NRML", "quantity": q}   # as Kite: a position
+                        for s, q in held.items() if q or s in today]}                            # closed today stays at 0
 
 
 def _overnight_short():
@@ -217,7 +219,7 @@ def test_overnight_legs_close_the_next_day_end_to_end(tmp_path, monkeypatch):
     s = paper.read_state(sid)
     assert not s["positions"] and paper.read_desired(sid) is None, paper.session_status(sid)
     assert "squared off" in paper.session_status(sid)
-    net = {p["tradingsymbol"]: p["quantity"] for p in fake.positions()["net"]}
+    net = {p["tradingsymbol"]: p["quantity"] for p in fake.positions()["net"] if p["quantity"]}
     assert not net                                                # flat at Zerodha: each leg bought back once
     assert not any(o["status"] == "TRIGGER PENDING" for o in fake.sent("SL"))
 
@@ -606,7 +608,7 @@ def test_a_lost_stop_that_filled_is_booked_not_bought_again():
             b.check_protective_stops(NOW)
     assert not b.positions and b.trades[-1].exit_price == 60.0             # booked at the stop's fill
     assert not [o for o in k.sent() if o["side"] == "BUY"]                  # never bought a second time
-    assert not {p["tradingsymbol"]: p["quantity"] for p in k.positions()["net"]}   # flat at Zerodha
+    assert not {p["tradingsymbol"]: p["quantity"] for p in k.positions()["net"] if p["quantity"]}   # flat at Zerodha
 
 
 class _SizedBook(_Book):

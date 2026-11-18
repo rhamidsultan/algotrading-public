@@ -94,7 +94,8 @@ USE = {    # other methods (POST, DELETE): exact paths, regexes
                   (re.compile(r"/api/backtests/[^/]+/delete"), re.compile(r"/api/backtest-runner/job/[0-9a-z-]+/delete"),
                    re.compile(r"/api/compare-period/[0-9a-z-]+/delete"))),
 }
-PAPER_ACTIONS = {"/api/paper/start", "/api/paper/stop", "/api/paper/kill", "/api/paper/reset", "/api/paper/delete"}
+PAPER_ACTIONS = {"/api/paper/start", "/api/paper/stop", "/api/paper/kill", "/api/paper/reset", "/api/paper/delete",
+                 "/api/paper/sync"}   # sync: LIVE sessions only, so the owner
 PW_PATHS = {"/account/password", "/api/account/password", "/api/account", "/signout"}
 HIDE_JSON = {"/api/data", "/api/live", "/api/history", "/api/stock", "/api/gold", "/api/us"}
 HIDE_PAGES = {"/", "/stock", "/gold", "/us"}
