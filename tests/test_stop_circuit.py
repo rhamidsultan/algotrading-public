@@ -16,6 +16,7 @@ class Circuit(FakeOrders):
     """Zerodha's upper circuit limit for stop triggers, as on 19 Nov."""
     limit = 442.15
     say_number = True
+    band_in_quote = True
 
     def place_order(self, *a, **k):
         if k.get("order_type") == "SL" and ((k.get("trigger_price") or 0) >= self.limit or (k.get("price") or 0) > self.limit):
@@ -27,7 +28,7 @@ class Circuit(FakeOrders):
     def quote(self, symbols):
         out = super().quote(symbols)
         for s in symbols:
-            if s.startswith("NFO:"):
+            if s.startswith("NFO:") and self.band_in_quote:
                 out[s]["upper_circuit_limit"] = self.limit
         return out
 
@@ -45,6 +46,13 @@ def test_a_stop_above_the_circuit_limit_is_placed_just_below_it():
     stops = k.sent("SL")
     assert len(stops) == 1 and stops[0]["trigger"] == 442.1 and stops[0]["price"] <= 442.15
     assert b.protect[c.label] == stops[0]["order_id"] and not b.pending_stop and c.label not in b.renew
+
+
+def test_a_refusal_still_caps_the_stop_when_no_quote_gives_the_limit():
+    k = Circuit(date(2026, 10, 13))
+    k.band_in_quote = False                                      # the limit only in Zerodha's refusal
+    b, c = _sold(k)
+    assert [s["trigger"] for s in k.sent("SL")] == [442.1] and k.refused == 1 and not b.pending_stop
 
 
 def test_the_limit_is_read_from_a_quote_when_zerodha_names_no_number():
@@ -164,7 +172,7 @@ def test_a_limit_the_band_has_moved_past_does_not_block_the_stop():
                 raise InputException("Trigger price should be higher than the last traded price.")
             return super().place_order(*a, **k)
     k = Moved(date(2026, 10, 13))
-    k.ltp = 0
+    k.ltp, k.band_in_quote = 0, False                            # no quote: the refusal names the limit
     b, c = _sold(k)
     assert b.stop_ceiling[c.label][1] == 442.15
     k.limit, k.ltp = 600.0, 450.0                                # later: band 600, price 450
@@ -177,6 +185,7 @@ def test_a_limit_the_band_has_moved_past_does_not_block_the_stop():
 
 def test_the_saved_limit_is_for_one_day_only():
     k = Circuit(date(2026, 10, 13))
+    k.band_in_quote = False
     b, c = _sold(k)
     assert b._ceiling_of(c.label) == 442.15
     b._day = "2099-01-01"
@@ -195,3 +204,53 @@ def test_a_stop_rejected_for_something_else_is_not_sent_again_and_again():
     for i in range(1, 6):
         b.check_protective_stops(NOW + timedelta(seconds=30 * i))
     assert len(k.sent("SL")) == n and told.count("Protective stop gone") == 1
+
+
+def test_the_circuit_limit_is_read_first_so_the_first_stop_is_not_refused():
+    """Hamid, 19 Nov: check the upper circuit and keep the stop below it. The quote's limit is read before the stop
+    is sent: one order, no refusal."""
+    k = Circuit(date(2026, 10, 13))
+    b, c = _sold(k)
+    stops = k.sent("SL")
+    assert len(stops) == 1 and stops[0]["trigger"] == 442.1 and stops[0]["price"] <= 442.15
+    assert not getattr(k, "refused", 0)                          # placed below it the first time
+
+
+def test_a_band_from_the_quote_that_the_price_has_passed_does_not_block_the_stop():
+    """The quote says 300 but the price is 320 (stale band): not used; and a capped stop refused for another reason
+    is tried once without the cap."""
+    class Stale(Circuit):
+        def quote(self, symbols):
+            out = super().quote(symbols)
+            for s in symbols:
+                if s.startswith("NFO:"):
+                    out[s].update(upper_circuit_limit=300.0, last_price=320.0,
+                                  depth={"buy": [{"price": 319.9}], "sell": [{"price": 320.1}]})
+            return out
+    k = Stale(date(2026, 10, 13))
+    k.limit = 1000.0
+    b, c = _sold(k)
+    live = [o for o in k.sent("SL") if o["status"] == "TRIGGER PENDING"]
+    assert len(live) == 1 and live[0]["trigger"] > 320 and c.label not in b.renew
+
+
+def test_a_capped_stop_refused_for_another_reason_is_tried_once_uncapped():
+    """The quote's band (442.15) is lower than Zerodha's real one (1000) and Zerodha refuses the capped stop for
+    another reason: tried once at 3x, which goes through."""
+    class Below(Circuit):
+        def quote(self, symbols):
+            out = super().quote(symbols)
+            for s in symbols:
+                if s.startswith("NFO:"):
+                    out[s]["upper_circuit_limit"] = 442.15
+            return out
+
+        def place_order(self, *a, **k):
+            if k.get("order_type") == "SL" and (k.get("trigger_price") or 0) < 450:
+                raise InputException("Trigger price should be higher than the last traded price.")
+            return super().place_order(*a, **k)
+    k = Below(date(2026, 10, 13))
+    k.limit = 1000.0
+    b, c = _sold(k)
+    live = [o for o in k.sent("SL") if o["status"] == "TRIGGER PENDING"]
+    assert len(live) == 1 and live[0]["trigger"] > 450 and c.label not in b.renew and not b.pending_stop
