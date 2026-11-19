@@ -5165,11 +5165,20 @@ h3{font-size:13px;color:var(--muted);margin:14px 0 6px;font-weight:600}
 .chip.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .chipcard{padding:10px}
 @media (max-width:420px){.chip{padding:6px 10px}.chip .cl{display:none}}
+@media (max-width:420px){.chips{grid-template-columns:repeat(2,minmax(0,1fr))}}
+#stopAllLive{min-height:38px;padding:0 14px;font-weight:600}
 .total .big{font-size:24px}
 .badge{font-size:12px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:5px;margin-left:6px;vertical-align:middle;border:1px solid var(--line);color:var(--muted)}
 .badge.shadow{border-color:var(--warn);color:var(--warn)}
 .badge.live{background:var(--down);border-color:var(--down);color:#fff}
 .stopped{border:1px solid var(--warn);border-radius:8px;padding:8px 10px;margin-top:10px;font-size:13px}
+.stopped.legs{background:color-mix(in srgb,var(--warn) 10%,var(--card));line-height:1.45}
+.ibtn.lbl span{font-size:13px;font-weight:600}
+.badge.idle{border-color:var(--warn);color:var(--warn)}
+.pnlseg{display:inline-flex;gap:0;margin:2px 0 6px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.pnlseg button{font:inherit;font-size:13px;min-height:34px;padding:0 12px;border:0;background:none;color:var(--text);cursor:pointer}
+.pnlseg button.on{background:var(--accent);color:#fff}
+.pnlseg button:focus-visible,.ibtn:focus-visible,.exitEdit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .livebox{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:4px 0 12px}
 .livebox.live{border-color:var(--down)}
 @media (max-width:720px){.tiles{grid-template-columns:repeat(2,1fr)}}
@@ -5465,6 +5474,7 @@ function renderForm() {
   $("strat").onchange = () => { fillParams(); modeUI(); };
   const want = QS.get("strategy");
   if (want && stratOf(want)) $("strat").value = want;
+  else if (LIVEPAGE) { const r = cat.find(c => c.live_ready); if (r) $("strat").value = r.name; }   // Live: a strategy that can trade
   document.querySelectorAll("input[name=mode]").forEach(r => r.onchange = modeUI);
   $("startBtn").onclick = start;
   fillParams();
@@ -5705,17 +5715,21 @@ function sessionCard(x) {
     .map(p => `<span class="chip2" title="${esc(p.label)}">${esc(p.label.split(/[,(]/)[0].replace(/ \(.*$/, "").slice(0, 22))} <b>${esc(params[p.key])}</b></span>`).join("");
   const mode = (d.mode || (s && s.mode) || "paper");
   const now = Date.now(), armedK = now - (armed[x.id + "k"] || 0) < 5000, armedR = now - (armed[x.id] || 0) < 5000, armedD = now - (armed[x.id + "d"] || 0) < 5000;
+  const live = mode === "live", held = !!(s && (s.positions || []).length);
+  const lb = (act, k, title, cls, label, armedText) => live   // LIVE: the actions that move money carry a word, not only an icon
+    ? `<button type="button" class="ibtn lbl ${cls || ""}${armedText ? " armed" : ""}" data-act="${act}" title="${esc(title)}">${icon(k, title)}<span>${esc(armedText || label)}</span></button>`
+    : ibtn(act, k, title, cls, armedText);
   const buttons = isOn(x)
     ? (x.killing ? `<span class="mt">${s && (s.positions || []).length ? "Squaring off at the next market update…" : "Stopping…"}</span>`
        : (s && !(s.positions || []).length
-          ? ibtn("kill", "stop", "Stop (no open positions)", mode === "paper" ? "" : "danger", armedK ? "Tap again to stop" : "")
-          : ibtn("kill", "squareoff", "Close all positions and stop", mode === "paper" ? "" : "danger", armedK ? "Tap again to square off" : ""))
+          ? lb("kill", "stop", "Stop (no open positions)", mode === "paper" ? "" : "danger", "Stop", armedK ? "Tap again to stop" : "")
+          : lb("kill", "squareoff", "Close all positions and stop", mode === "paper" ? "" : "danger", "Close all & stop", armedK ? "Tap again to square off" : ""))
          + (mode === "paper" ? ibtn("stop", "stop", "Stop (keep positions)", "danger") : ""))
-    : (s ? ibtn("resume", "play", mode === "live" ? "Resume LIVE with this account (asks you to type LIVE)" : "Resume", "pri")
-         + (mode === "live" && (s.positions || []).length ? "" : ibtn("reset", "reset", "Reset account", "", armedR ? "Tap again to clear" : "")) : "")
-      + ibtn("delete", "trash", "Delete session", "", armedD ? "Tap again to delete" : "");
+    : (s ? lb("resume", "play", mode === "live" ? "Resume LIVE with this account (asks you to type LIVE)" : "Resume", "pri", "Resume")
+         + (live && held ? "" : ibtn("reset", "reset", "Reset account", "", armedR ? "Tap again to clear" : "")) : "")
+      + (live && held ? "" : ibtn("delete", "trash", "Delete session", "", armedD ? "Tap again to delete" : ""));
   const syncBtn = mode === "live" && s && !x.killing && !(d.sync_only)
-    ? ibtn("sync", "sync", "Sync with Zerodha: book legs you squared off in Kite") : "";
+    ? lb("sync", "sync", "Sync with Zerodha: book legs you squared off in Kite", "", "Sync") : "";
   const copyBtn = syncBtn + ibtn("copy", "copy", "Copy to a new session")
     + (mode === "paper" ? `<button type="button" class="ibtn pri dep" data-act="deploy" title="Deploy to LIVE with the same settings">${icon("deploy", "Deploy")}<span>Deploy</span></button>` : "");
   const badge = LIVEPAGE || mode !== "paper" ? `<span class="badge ${mode}">${mode.toUpperCase()}</span>` : "";
@@ -5723,7 +5737,8 @@ function sessionCard(x) {
   const limits = lim ? `<span class="chip2" title="Live limits">${icon("shield", "Live limits")} ${lim.max_lots} lot${lim.allow_over_max_lots ? " (larger allowed)" : ""} · ${lakh(lim.daily_loss_limit)}/day${lim.protect_mult > 0 ? " · " + lim.protect_mult + "×" : ""}</span>` : "";
   const margin = MG().sessions[x.id] ? `<span class="chip2" title="Margin for its open legs">${icon("wallet", "Margin for its open legs")} ${lakh(MG().sessions[x.id])}</span>` : "";
   const who = x.started_by ? `<span class="chip2" title="Started by ${esc(x.started_by)}">${icon("user", "Started by")} ${esc(x.started_by)}</span>` : "";
-  const stoppedNote = x.stopped_because ? `<div class="stopped">Stopped by itself: ${esc(x.stopped_because)}</div>` : "";
+  const stoppedNote = (x.stopped_because ? `<div class="stopped">Stopped by itself: ${esc(x.stopped_because)}</div>` : "")
+    + (live && held && !isOn(x) ? `<div class="stopped legs"><b>Stopped with ${s.positions.length} open leg${s.positions.length > 1 ? "s" : ""} at Zerodha.</b> Nothing watches ${s.positions.length > 1 ? "them" : "it"} now, and protective stops are day orders that end at the close. Tap <b>Resume</b> to carry on, or square off in Kite and tap <b>Sync</b>.</div>` : "");
   let body = '<div class="empty">No updates yet.</div>';
   if (s) {
     const t = new Date(s.time), day = dayPnl(x);
@@ -6088,7 +6103,8 @@ function items() {
     return {id: x.id, name: shortName(x), mode: d.mode || (s && s.mode) || "paper",
             state: x.running ? "live" : x.desired ? "wait" : "", stateText: x.running ? "Running" : x.desired ? "Waiting to start" : "Stopped",
             legs: s ? s.positions.length : 0, open: s ? s.open : null, total: s ? s.total : null, time: s ? s.time : "", day: dayPnl(x),
-            feed: d.feed || (s && s.feed) || "",
+            feed: d.feed || (s && s.feed) || "", chip: x.label || shortName(x),
+            idle: (d.mode || (s && s.mode)) === "live" && !x.running && !x.desired && !!(s && s.positions.length),
             // a running session whose last update is 3+ minutes behind the newest one
             stale: x.running && t && newest - t > 180000 ? clock(t) : ""};
   });
@@ -6111,7 +6127,7 @@ function renderSummary() {
   $("summary").innerHTML = it.length
     ? `<div class="srow hd"><span></span><span class="n">Unrealized</span><span class="n">Today</span><span class="n">Total ₹</span></div>` + it.map(i =>
       `<a class="srow${i.legs ? "" : " flat"}" href="/${KIND}#${encodeURIComponent(i.id)}" title="${esc(i.stateText)}">
-        <span class="sname"><span class="dot ${i.state}"></span><span class="tx">${esc(i.name)}</span>${pips(i.legs)}${feedIcon(i.feed)}${i.stale ? icon("stale", "No update since " + i.stale) : ""}${LIVEPAGE || i.mode !== "paper" ? `<span class="badge ${i.mode}">${i.mode.toUpperCase()}</span>` : ""}</span>
+        <span class="sname"><span class="dot ${i.state}"></span><span class="tx">${esc(i.name)}</span>${pips(i.legs)}${feedIcon(i.feed)}${i.stale ? icon("stale", "No update since " + i.stale) : ""}${i.idle ? `<span class="badge idle" title="Stopped with open legs: nothing watches them">STOPPED</span>` : LIVEPAGE || i.mode !== "paper" ? `<span class="badge ${i.mode}">${i.mode.toUpperCase()}</span>` : ""}</span>
         <span class="n ${sign(i.open || 0)}">${i.legs ? amt(Math.abs(i.open)) : "–"}</span><span class="n ${sign(i.day || 0)}">${i.day == null ? "–" : amt(Math.abs(i.day))}</span><span class="n t ${sign(i.total || 0)}">${i.total == null ? "–" : amt(Math.abs(i.total))}</span></a>`).join("")
     : `<div class="empty">No sessions yet. <a href="/${KIND}/new">Start one</a>.</div>`;
 }
@@ -6121,7 +6137,7 @@ function renderChips() {
   const it = items();
   if (!it.find(i => i.id === selected)) selected = it.length ? it[0].id : "";
   $("chips").innerHTML = it.length ? it.map(i => `<button type="button" class="chip ${i.id === selected ? "sel" : ""}" data-id="${esc(i.id)}" title="${esc(i.stateText)}">
-      <span class="cn"><span class="dot ${i.state}"></span> ${esc(i.name)}</span>
+      <span class="cn"><span class="dot ${i.state}"></span> ${esc(i.chip)}</span>
       <span class="cv ${sign(i.day || 0)}">${i.day == null ? "–" : ainr(i.day)}<span class="cl"> today</span></span></button>`).join("")
     : `<div class="emptybox">${icon(LIVEPAGE ? "shield" : "sim", "")}<div>${LIVEPAGE ? "No live session." : "No paper session yet."}</div>
         <a class="ibtn pri" href="/${KIND}/new"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New session</a></div>`;
@@ -6183,9 +6199,9 @@ function renderPicker() {
   $("picker").innerHTML = `<h2>1 · Choose a strategy</h2><div class="mt" style="margin:-6px 0 10px">${mg.time
       ? `Margins: Zerodha's basket margin for each strategy's entry legs (default settings, 1 lot), checked ${esc(mtime(mg.time))}`
       : "Margins appear once the engine has checked them with Zerodha"}${mg.error ? ` · <span class="down">last check failed: ${esc(mg.error)}</span>` : ""}
-      · <button class="link" type="button" id="mRefresh">${mg.requested ? "update asked" : "update now"}</button></div><div class="picks">${cat.map(c => {
+      · <button class="link" type="button" id="mRefresh">${mg.requested ? "update asked" : "update now"}</button></div><div class="picks">${(LIVEPAGE ? [...cat].sort((a, b) => (b.live_ready ? 1 : 0) - (a.live_ready ? 1 : 0)) : cat).map(c => {
     const n = ss.filter(x => x.strategy === c.name && isOn(x)).length;
-    const tags = (TAGS[c.name] || []).concat(LIVEPAGE && c.live_ready ? [["Live ready", "good"]] : []);
+    const tags = (TAGS[c.name] || []).concat(LIVEPAGE ? [c.live_ready ? ["Live ready", "good"] : ["Paper only", ""]] : []);
     return `<button type="button" class="scard" data-s="${esc(c.name)}"><b>${esc(c.title)}</b>
       <span>${tags.map(([t, k]) => `<span class="tag ${k || ""}">${esc(t)}</span>`).join("")}</span>
       <span class="d">${esc(c.description)}</span>${marginOf(c.name) ? `<span class="mg">Margin ${lakh(marginOf(c.name).margin)} <small>per ${esc(marginOf(c.name).unit)}</small></span>` : ""}${n ? `<span class="run">${n} running</span>` : ""}</button>`;

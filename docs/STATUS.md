@@ -4,6 +4,16 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Live page review (18 Nov 2026, pull request "live-page-review", needs "remove-shadow")
+
+- Reviewed at phone width, light and dark (ui-review checklist). Changed on LIVE cards: Close all & stop, Resume and
+  Sync carry words, not only an icon; a stopped LIVE session that still holds legs shows a banner (nothing watches
+  them; Resume or square off in Kite and Sync) and STOPPED on the overview, and has no Delete / Reset there.
+- Session chips show the session's name and fit two to a row on a phone; Stop all LIVE is a full-size button; the
+  P&L Overall / Current cycle toggle is a real control (34 px, focus ring).
+- Start a live session lists the strategies that can trade live first, marks the others "Paper only" and opens on a
+  live-ready one.
+
 ## Shadow mode removed (18 Nov 2026, pull request "remove-shadow", needs "edit-exit-price")
 
 - The Live pages offer LIVE only: the start form has no Shadow choice, Deploy (from a Paper card) goes to LIVE, the
