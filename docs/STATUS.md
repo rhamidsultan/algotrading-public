@@ -4,6 +4,40 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Live page review (18 Nov 2026, pull request "live-page-review", needs "remove-shadow")
+
+- Reviewed at phone width, light and dark (ui-review checklist). Changed on LIVE cards: Close all & stop, Resume and
+  Sync carry words, not only an icon; a stopped LIVE session that still holds legs shows a banner (nothing watches
+  them; Resume or square off in Kite and Sync) and STOPPED on the overview, and has no Delete / Reset there.
+- Session chips show the session's name and fit two to a row on a phone; Stop all LIVE is a full-size button; the
+  P&L Overall / Current cycle toggle is a real control (34 px, focus ring).
+- Start a live session lists the strategies that can trade live first, marks the others "Paper only" and opens on a
+  live-ready one.
+
+## Shadow mode removed (18 Nov 2026, pull request "remove-shadow", needs "edit-exit-price")
+
+- The Live pages offer LIVE only: the start form has no Shadow choice, Deploy (from a Paper card) goes to LIVE, the
+  Live › Overview LIVE/SHADOW filter is gone, and `/api/paper/start` refuses mode "shadow". Paper stays as it is.
+- Existing SHADOW sessions (they never sent an order) are stopped and their folders deleted by the dashboard
+  (`algolab_panel._drop_shadow`). The engine still has its no-order path inside (`LiveSettings.mode == "shadow"`,
+  used by tests); nothing can start one.
+
+## Exit prices of closed LIVE legs can be edited (18 Nov 2026, pull request "edit-exit-price", needs "live-resume")
+
+- Live › a session › Closed cycles › a cycle: each leg's exit price has an edit button (owner). The new price replaces
+  the old one in the trade, its exit fill and the realised P&L (charges stay as booked); the leg shows "edited · was
+  <first price>". Nothing is sent to Zerodha. For e.g. a square-off in Kite booked at an estimate.
+- Running session: the dashboard writes `EDITS.json`, the engine applies it within seconds (`LiveBroker.edit_exit`);
+  stopped: the dashboard edits its saved account the same way (`algolab_panel._edit_exit_saved`, tested to match).
+
+## A stopped LIVE session resumes with its own account (18 Nov 2026, pull request "live-resume", needs "kite-sync")
+
+- Why: Resume on a LIVE card only said "start it again from the form", which made a new, empty session: a strategy
+  stopped with legs held (e.g. Blocked) could not continue the next day.
+- Now Resume asks you to type LIVE and restarts the same session: positions, P&L, cycle and stops carry on; the
+  first check reads Zerodha (and syncs legs closed in Kite) before anything is sent.
+- Reset account is hidden (and refused) on a LIVE session that still holds legs: it would forget them.
+
 ## Legs squared off in Kite are synced (18 Nov 2026, pull request "kite-sync")
 
 - Why: a live leg squared off by hand in Kite (or the Positions page) stopped the session ("Positions differ from

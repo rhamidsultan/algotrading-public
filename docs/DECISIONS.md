@@ -105,3 +105,6 @@ Dated, newest first. One line each; link the pull request when there is one.
 - 2026-11-17 — Gmail and Telegram alerts for live trading (Hamid): set from Profile, not by editing the server.
 - 2026-11-18 — Algo Lab work moves to the public repo algotrading-public (free CI); the server updates from it. The private repo keeps the history and the IBKR snapshot branch (Hamid).
 - 2026-11-18 — A live leg squared off in Kite is synced, not a stop (Hamid, 11 Nov): automatic plus a Sync button (also on a stopped session); the other legs carry on; the closed leg is not re-entered in that trade.
+- 2026-11-18 — A stopped LIVE session is resumed from its card (type LIVE) with its own account, so a strategy continues the next day (Hamid).
+- 2026-11-18 — Exit prices of any closed leg of a LIVE session can be edited; P&L is recalculated and the leg shows "edited" with the first price kept (Hamid).
+- 2026-11-18 — Shadow mode removed (Hamid): no Shadow when starting or deploying, the Live page shows LIVE only, existing shadow sessions are deleted; Paper stays.

@@ -230,6 +230,7 @@ class LiveBroker(PaperBroker):
         self.synced: dict[str, int] = {}           # Kite order id -> units of it already booked as a close in Kite
         self._sync_seen: set = set()               # symbols seen with less at Zerodha, no Kite order found yet
         self.outside: list = []                    # (contract, units) closed in Kite, for the strategy (on_outside_close)
+        self.exit_edits: dict[str, dict] = {}      # trade key -> {"was", "price", "by", "at"}: exit prices edited by hand
 
     # wiring to the live feed (its Zerodha client and contract list)
     def attach(self, feed) -> None:
@@ -247,6 +248,7 @@ class LiveBroker(PaperBroker):
         d["live"] = {"protect": self.protect, "protect_level": self.protect_level, "orders_today": self.orders_today,
                      "protect_day": self.protect_day, "renew": sorted(self.renew), "pending_stop": self.pending_stop,
                      "synced": dict(list(self.synced.items())[-200:]), "empty_sync_at": self._empty_sync_at,
+                     "exit_edits": self.exit_edits,
                      "released": self.released, "working": self.working, "contracts": {k: c.to_dict() for k, c in self.contracts.items()}}
         return d
 
@@ -259,7 +261,8 @@ class LiveBroker(PaperBroker):
         self.protect_day = dict(live.get("protect_day") or {})
         self.renew = set(live.get("renew") or [])
         self.synced = {str(k): int(v) for k, v in (live.get("synced") or {}).items()}
-        self._empty_sync_at = float(live.get("empty_sync_at") or 0.0)   # a Sync pressed once (a stopped card restarts)
+        self._empty_sync_at = float(live.get("empty_sync_at") or 0.0)
+        self.exit_edits = {str(k): dict(v) for k, v in (live.get("exit_edits") or {}).items() if isinstance(v, dict)}   # a Sync pressed once (a stopped card restarts)
         self.pending_stop = {k: (v if isinstance(v, dict) else {"tag": str(v), "at": 0.0})
                              for k, v in (live.get("pending_stop") or {}).items()}
         self.working = {k: dict(v) for k, v in (live.get("working") or {}).items() if isinstance(v, dict)}
@@ -350,6 +353,37 @@ class LiveBroker(PaperBroker):
         return net
 
     KITE_CLOSE = "Closed in Kite"
+
+    @staticmethod
+    def trade_key(contract: str, exit_time, qty) -> str:
+        """One closed leg (a trade): its contract, exit time (ISO, as saved) and quantity."""
+        t = exit_time.isoformat() if hasattr(exit_time, "isoformat") else str(exit_time)
+        return f"{contract}|{t}|{int(qty)}"
+
+    def edit_exit(self, key: str, price: float, by: str = "", at: str = "") -> str:
+        """Correct the exit price of a closed leg (e.g. a square-off in Kite booked at an estimate): the trade, its
+        exit fill and the realised P&L move by the difference; charges stay as booked. The first price booked is
+        kept (exit_edits). Nothing is sent to Zerodha. Returns a line for the log; raises ValueError."""
+        price = round(float(price), 2)
+        if not price > 0:
+            raise ValueError("The exit price must be above 0.")
+        t = next((t for t in self.trades if self.trade_key(t.contract, t.exit_time, t.qty) == key), None)
+        if t is None:
+            raise ValueError("That closed leg was not found.")
+        old = t.exit_price
+        d = round((price - old) * t.qty * (1 if t.side == "LONG" else -1), 2)
+        t.exit_price, t.gross_pnl, t.net_pnl = price, round(t.gross_pnl + d, 2), round(t.net_pnl + d, 2)
+        self.realized_gross += d
+        side = "SELL" if t.side == "LONG" else "BUY"
+        f = next((f for f in reversed(self.fills) if f.contract == t.contract and f.time == t.exit_time and f.side == side
+                  and f.price == old), None)
+        if f is not None:
+            f.price = price
+        rec = self.exit_edits.get(key) or {"was": old}
+        rec.update(price=price, by=by, at=at)
+        self.exit_edits[key] = rec
+        return (f"Exit price of {t.contract} ({t.qty}, closed {t.exit_time:%d %b %H:%M}) edited: {old:.2f} -> {price:.2f}"
+                f" (booked first at {rec['was']:.2f}); P&L {'+' if d >= 0 else '-'}Rs {abs(d):,.0f}" + (f" by {by}" if by else ""))
 
     def _kite_closes(self, sym: str, side: str, want: int, since=None) -> tuple[dict, int, float]:
         """Orders in today's order book that closed up to `want` units of `sym`: filled, `side`, NRML, not sent by Algo
@@ -483,7 +517,7 @@ class LiveBroker(PaperBroker):
             self.outside.append((c, gone))
             msg = (f"{c.label}: {gone} squared off in Kite, booked at {px:.2f}"
                    + (" (Kite order " + ", ".join(used) + ")" if used and not estimated else "")
-                   + (" - price ESTIMATED (no Kite order of yours found): check the exit price" if estimated else "")
+                   + (" - price ESTIMATED (no Kite order of yours found): edit the exit price on the card (Closed cycles)" if estimated else "")
                    + note)
             self.log(msg)
             self.notify("Algo Lab: leg squared off in Kite", msg)
@@ -1679,7 +1713,7 @@ class LiveBroker(PaperBroker):
                     self.synced[oid] = self.synced.get(oid, 0) + q
                 self.outside.append((contract, gone))
                 msg = (f"{contract.label}: {gone} squared off in Kite; booked at {px:.2f}"
-                       + ("" if got >= gone else " - price ESTIMATED (no Kite order found): check the exit price"))
+                       + ("" if got >= gone else " - price ESTIMATED (no Kite order found): edit the exit price on the card (Closed cycles)"))
                 self.log(msg)
                 self.notify("Algo Lab: leg closed outside", msg)
                 if contract not in self.positions:
