@@ -109,3 +109,4 @@ Dated, newest first. One line each; link the pull request when there is one.
 - 2026-11-18 — A stopped LIVE session is resumed from its card (type LIVE) with its own account, so a strategy continues the next day (Hamid).
 - 2026-11-18 — Exit prices of any closed leg of a LIVE session can be edited; P&L is recalculated and the leg shows "edited" with the first price kept (Hamid).
 - 2026-11-18 — Shadow mode removed (Hamid): no Shadow when starting or deploying, the Live page shows LIVE only, existing shadow sessions are deleted; Paper stays.
+- 2026-11-19 — Protective stops: read the option's upper circuit limit first and keep the stop below it (Hamid).

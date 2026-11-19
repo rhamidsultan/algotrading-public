@@ -9,6 +9,9 @@ Newest information first within each section.
 - Why (19 Nov, intraday_strangle-10): the PE's stop (3 x 157.10 = 471.30) was above its upper circuit limit
   (442.15); Zerodha refused it, so the leg had no stop from 09:20. Each retry was taken for a lost answer, so at the
   PE's leg stop (09:29) the session could not rule out a live stop, halted and squared off the CE (in profit) too.
+- The option's upper circuit limit is read from a quote before every protective stop (pull request
+  "stop-band-first"): a 3x trigger (or its limit price) at or above it goes one tick below it, so Zerodha does not
+  refuse the first order.
 - Now a stop refused for the circuit limit is placed again at once one tick below it (limit price capped at the
   circuit): nearer, so it protects more. A refusal from Zerodha (InputException / OrderException, or a circuit
   message) is never taken for a lost answer: no "may still be at Zerodha" wait, so an exit closes only its own leg.

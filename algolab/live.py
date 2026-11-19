@@ -1095,8 +1095,9 @@ class LiveBroker(PaperBroker):
         (a timeout), the order is looked up by its tag and adopted if it got there, so a stop is never placed twice.
         While that cannot be told (the order book cannot be read), no other stop is placed for the leg.
         A trigger above the option's upper circuit limit is refused by Zerodha (19 Nov: 3 x 157.10 = 471.30 against a
-        limit of 442.15 left the PE without a stop): the stop is then placed again at once just below the limit
-        (`ceiling`), which is nearer, so it protects more. A refusal is never taken for a lost answer."""
+        limit of 442.15 left the PE without a stop): the limit is read from a quote first and the stop placed just
+        below it (`ceiling`), which is nearer, so it protects more; if Zerodha still refuses it for the circuit (the
+        band moved), it is placed again below the limit it names. A refusal is never taken for a lost answer."""
         if self.s.protect_mult <= 0:
             return False
         label = contract.label
@@ -1117,6 +1118,12 @@ class LiveBroker(PaperBroker):
         asked = trigger
         if ceiling is None:
             ceiling = self._ceiling_of(label)             # a limit Zerodha named for this leg's stop today
+        if ceiling is None and _depth == 0:               # the option's upper circuit limit now, from one quote:
+            band = self._touch(sym, "BUY")[1]             # the stop goes below it, so Zerodha does not refuse it
+            if band and band > self.tick and (trigger >= band or round(trigger * 1.1, 2) > band):
+                ceiling = float(band)
+                self.log(f"Protective stop for {label}: trigger {trigger:.2f} is not below the upper circuit limit "
+                         f"{band:.2f}; placed just below it")
         if ceiling is not None:                          # below the circuit limit: Zerodha refuses one above it
             trigger = min(trigger, math.floor(round(ceiling / self.tick, 6) - 1) * self.tick)
         trigger = round(math.ceil(round(trigger / self.tick, 6)) * self.tick, 2)
