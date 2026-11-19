@@ -104,3 +104,4 @@ Dated, newest first. One line each; link the pull request when there is one.
 - 2026-11-02 — Stop on a flat session stops it at once, also outside market hours (Hamid). Multi-live next (Hamid): same contract may be held by several live sessions, per-session daily loss limits only, max live sessions a setting (default 3); multi-live before the 24 Oct live-safety fixes.
 - 2026-11-17 — Gmail and Telegram alerts for live trading (Hamid): set from Profile, not by editing the server.
 - 2026-11-18 — Algo Lab work moves to the public repo algotrading-public (free CI); the server updates from it. The private repo keeps the history and the IBKR snapshot branch (Hamid).
+- 2026-11-18 — A live leg squared off in Kite is synced, not a stop (Hamid, 11 Nov): automatic plus a Sync button (also on a stopped session); the other legs carry on; the closed leg is not re-entered in that trade.

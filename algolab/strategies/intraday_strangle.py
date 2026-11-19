@@ -70,12 +70,23 @@ class IntradayStrangle(Strategy):
         out = {"pnl": ctx.net_realized - d["start_realized"] + ctx.unrealized,
                "levels": {f"{r} sold": leg["strike"] for r, leg in legs.items()},
                "note": "; ".join(f"{r} {leg['strike']} sold {leg['sold']:.2f}, stop {leg['stop']:.2f}"
-                                 f"{' (out)' if not leg['open'] else ''}" for r, leg in legs.items())}
+                                 f"{(' (closed in Kite)' if leg.get('manual') else ' (out)') if not leg['open'] else ''}"
+                                 for r, leg in legs.items())}
         if self.p.day_stop > 0:
             out["stop"] = -self.p.day_stop
         if self.p.day_target > 0:
             out["target"] = self.p.day_target
         return out
+
+    def on_outside_close(self, ctx, contract, qty) -> None:
+        """A leg squared off in Kite: out for the day, no re-entry; the other leg keeps its own stop."""
+        d = self.day
+        if not d or d.get("skip") or contract in ctx.positions:
+            return
+        leg = d.get("legs", {}).get(contract.right)
+        if leg is not None and leg.get("strike") == contract.strike:
+            leg.update(open=False, reentries=self.p.reentries, manual=True)
+            ctx.log(f"{contract.right} squared off in Kite: no re-entry for it today")
 
     def _contract(self, ctx, leg, right):
         return ctx.option(date.fromisoformat(self.day["expiry"]), leg["strike"], right)

@@ -902,6 +902,40 @@ def _target():
     return _slot(str(body.get("id", "")))
 
 
+LIVE_KEYS = ("max_lots", "daily_loss_limit", "max_orders_per_day", "protect_mult", "allow_over_max_lots")
+
+
+@panel.route("/api/paper/sync", methods=["POST"])
+def api_sync():
+    """Sync a LIVE session with Zerodha: legs squared off by hand in Kite (or on the Positions page) are booked closed
+    at that order's price. A running session does it at once (SYNC file); a stopped one is started only to sync
+    (it sends no orders: it reads Zerodha's positions and order book) and stops again."""
+    x = _target()
+    if not x:
+        return jsonify(error="No such session."), 404
+    d = x["state"].parent
+    state = _json(x["state"]) or {}
+    desired = _json(x["desired"]) or {}
+    if (desired.get("mode") or state.get("mode")) != "live":
+        return jsonify(error="Sync with Zerodha is for LIVE sessions."), 400
+    if x["desired"].exists() or _age(x["beat"]) < 15:
+        if state.get("closing_only") or (state.get("halted") and x["desired"].exists()):
+            return jsonify(error="It is stopping and still closing its legs: Sync once it has stopped."), 400
+        (d / "SYNC").write_text("sync")
+        return jsonify(ok=True, started=False)
+    if not state.get("strategy"):
+        return jsonify(error="This session has no account to sync yet."), 400
+    want = {"strategy": state["strategy"], "params": state.get("params") or {}, "feed": "kite", "mode": "live",
+            "live": {k: v for k, v in (state.get("live") or {}).items() if k in LIVE_KEYS}, "sync_only": True}
+    for k in ("risk", "preset", "label"):
+        if state.get(k):
+            want[k] = state[k]
+    (d / "STOP").unlink(missing_ok=True)
+    (d / "status.txt").unlink(missing_ok=True)
+    _write(d / "desired.json", want)
+    return jsonify(ok=True, started=True)
+
+
 @panel.route("/api/paper/stop", methods=["POST"])
 def api_stop():
     x = _target()
@@ -5149,6 +5183,8 @@ details.sec>summary .st{display:inline-flex;align-items:center;gap:6px}
 @media (max-width:420px){.form{grid-template-columns:1fr}}
 .mfilt{display:flex;gap:6px;margin:8px 0 2px}.mfilt button{font:inherit;font-size:12.5px;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer}
 .mfilt button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);max-width:min(92vw,520px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;box-shadow:0 6px 24px rgba(0,0,0,.25);z-index:60;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.on{opacity:1}
 </style>
 </head>
 <body>
@@ -5236,6 +5272,7 @@ const ICONS = {
   shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
   expand: '<path d="M7 9l5 5 5-5M7 4l5 5 5-5"/>',
   collapse: '<path d="M7 15l5-5 5 5M7 20l5-5 5 5"/>',
+  sync: '<path d="M20 11a8 8 0 0 0-14.3-4.9M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9M20 20v-4h-4"/>',
   sold: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   bought: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   deploy: '<path d="M12 16V4M6 10l6-6 6 6"/><path d="M5 20h14"/>'};
@@ -5548,6 +5585,13 @@ async function start() {
   } catch (e) { $("formErr").textContent = e.message; } finally { busy = false; if ($("startBtn")) $("startBtn").disabled = false; }
 }
 
+function flash(text) {          // a short note at the bottom of the screen (polite: read out by screen readers)
+  let t = document.getElementById("toast");
+  if (!t) { t = document.createElement("div"); t.id = "toast"; t.className = "toast"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+  t.textContent = text; t.classList.add("on");
+  clearTimeout(flash.t); flash.t = setTimeout(() => t.classList.remove("on"), 4000);
+}
+
 async function act(kind, id, btn) {
   if (kind === "kill" && !(Date.now() - (armed[id + "k"] || 0) < 5000)) { armed[id + "k"] = Date.now(); btn.textContent = (btn.title || "").startsWith("Stop (no") ? "Tap again to stop" : "Tap again: close all positions and stop"; return; }
   if (kind === "reset" && !(Date.now() - (armed[id] || 0) < 5000)) { armed[id] = Date.now(); btn.textContent = "Tap again to clear its account"; return; }
@@ -5561,6 +5605,9 @@ async function act(kind, id, btn) {
       const x = last.sessions.find(s => s.id === id), s = x.session;
       if ((s.mode || "paper") === "live") { alert("To restart live trading, start it again from the form below (it asks you to confirm)."); btn.disabled = false; return; }
       await post("/api/paper/start", {id, strategy: s.strategy, feed: s.feed, params: s.params, mode: s.mode || "paper", live: s.live, label: x.label, risk: s.risk || (x.desired || {}).risk, preset: (x.desired || {}).preset || s.preset});
+    } else if (kind === "sync") {
+      const j = await post("/api/paper/sync", {id});
+      flash(j.started ? "Syncing with Zerodha: it reads Kite, sends no trades and stops again in a moment." : "Syncing with Zerodha now.");
     } else await post("/api/paper/" + kind, {id});
   } catch (e) { alert(e.message); }
   setTimeout(() => load(true), kind === "stop" ? 2500 : 300);
@@ -5570,7 +5617,7 @@ async function act(kind, id, btn) {
 function sessionCard(x) {
   const s = x.session, st = stratOf(x.strategy) || {title: x.strategy, params: []};
   const d = x.desired || {}, params = d.params || (s && s.params) || {}, feed = d.feed || (s && s.feed);
-  const state = x.running ? ["live", ""] : x.desired ? ["wait", "Waiting to start" + (x.waiting ? ": " + x.waiting : "")] : ["", "Stopped"];
+  const state = x.running ? ["live", ""] : x.desired ? ["wait", (x.desired.sync_only ? "Syncing with Zerodha" : "Waiting to start") + (x.waiting ? ": " + x.waiting : "")] : ["", "Stopped"];
   // settings changed from the strategy's defaults, as small chips
   const shown = st.params.filter(p => params[p.key] !== undefined && params[p.key] != p.default)
     .map(p => `<span class="chip2" title="${esc(p.label)}">${esc(p.label.split(/[,(]/)[0].replace(/ \(.*$/, "").slice(0, 22))} <b>${esc(params[p.key])}</b></span>`).join("");
@@ -5584,7 +5631,9 @@ function sessionCard(x) {
          + (mode === "paper" ? ibtn("stop", "stop", "Stop (keep positions)", "danger") : ""))
     : (s ? ibtn("resume", "play", "Resume", "pri") + ibtn("reset", "reset", "Reset account", "", armedR ? "Tap again to clear" : "") : "")
       + ibtn("delete", "trash", "Delete session", "", armedD ? "Tap again to delete" : "");
-  const copyBtn = ibtn("copy", "copy", "Copy to a new session")
+  const syncBtn = mode === "live" && s && !x.killing && !(d.sync_only)
+    ? ibtn("sync", "sync", "Sync with Zerodha: book legs you squared off in Kite") : "";
+  const copyBtn = syncBtn + ibtn("copy", "copy", "Copy to a new session")
     + (mode === "paper" || mode === "shadow" ? `<button type="button" class="ibtn pri dep" data-act="deploy" title="Deploy to Shadow or LIVE with the same settings">${icon("deploy", "Deploy")}<span>Deploy</span></button>` : "");
   const badge = LIVEPAGE || mode !== "paper" ? `<span class="badge ${mode}">${mode.toUpperCase()}</span>` : "";
   const lim = (d.live || (s && s.live)) || null;

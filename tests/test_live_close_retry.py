@@ -171,7 +171,7 @@ def test_retry_sends_only_what_zerodha_still_holds():
                      quantity=65, product="NRML", order_type="LIMIT", price=30.0)
     n = len(book.buys())
     f = b.retry_close(NOW, c, Quote(10.0, bid=9.9, ask=10.1))
-    assert not b.positions and "outside Algo Lab" in f.reason and len(book.buys()) == n
+    assert not b.positions and "Closed in Kite" in f.reason and len(book.buys()) == n
     assert all(o["status"] == "CANCELLED" for o in book.sent("SL"))
     # Zerodha on the other side of this session: not touched
     book2 = Book(date(2026, 10, 13))

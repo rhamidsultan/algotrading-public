@@ -839,8 +839,10 @@ class _OrderBook(dict):
     """The fake's orders by id; called like Kite's orders(), it gives the day's order book (the fields read)."""
 
     def __call__(self):
-        return [{"order_id": o["order_id"], "tradingsymbol": o["sym"], "transaction_type": o["side"], "tag": o["tag"],
-                 "order_type": o["type"], "status": o["status"], "filled_quantity": o["filled_quantity"]}
+        return [{"order_id": o["order_id"], "tradingsymbol": o["sym"], "transaction_type": o["side"], "tag": o.get("tag"),
+                 "order_type": o["type"], "status": o["status"], "filled_quantity": o["filled_quantity"],
+                 "average_price": o.get("average_price", 0), "product": o.get("product", "NRML"),
+                 "order_timestamp": o.get("order_timestamp")}
                 for o in self.values()]
 
 
@@ -957,7 +959,7 @@ def test_protective_stop_fill_and_mismatch_are_caught():
     with pytest.raises(Halt, match="Protective stop filled"):
         b.check_protective_stops(NOW)
     assert not b.positions and b.trades[-1].exit_price == 61.0
-    # a position Zerodha does not have blocks the next start
+    # a position Zerodha does not have (and no Kite order of yours closed it) blocks the next start
     b3, _ = _live_broker(FakeOrders(date(2026, 10, 13)))
     b3._apply(NOW, c, "SELL", 65, 20.0, 0.0, "Entry", "g", "live")
     with pytest.raises(Blocked, match="differ from Zerodha"):
@@ -1578,8 +1580,8 @@ def test_position_check_needs_two_misses_and_reports_unowned_once():
     b.check_positions(NOW); b.check_positions(NOW)             # held by nobody: told once, no stop
     assert told.count("Position held by no live session") == 1
     k.orders["y"] = {"order_id": "y", "sym": "NIFTY26O1324300CE", "side": "BUY", "qty": 65, "type": "LIMIT",
-                     "status": "COMPLETE", "filled_quantity": 65, "average_price": 30, "product": "NRML"}
-    b.check_positions(NOW)                                      # first miss: only logged
+                     "status": "COMPLETE", "filled_quantity": 65, "average_price": 30, "product": "MIS"}
+    b.check_positions(NOW)                                      # first miss (no order of yours closed it): logged
     with pytest.raises(Blocked, match="two checks in a row"):
         b.check_positions(NOW)
 

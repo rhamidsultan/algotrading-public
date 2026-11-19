@@ -289,6 +289,15 @@ class Session:
             self.closing_only = True
             self.close_tries = int(self.saved.get("close_tries") or 0)
         self._kill_noted = False
+        self._pending_halt = ""
+        if self.mode == "live":
+            self.broker.sync_only = bool(want.get("sync_only"))
+            sync = self.slot.dir / "SYNC"           # a Sync request left from long ago (e.g. a stopped session): not now
+            try:
+                if sync.exists() and _time.time() - sync.stat().st_mtime > 600:
+                    sync.unlink(missing_ok=True)
+            except OSError:
+                pass
         self._stops_checked = 0.0
         self._positions_checked = _time.time()   # the start-of-session reconcile covers the first minute
         self._failing: dict = {}         # kind of Zerodha check -> (failing since, alert sent)
@@ -325,8 +334,11 @@ class Session:
             if kill.exists():
                 kill.unlink(missing_ok=True)
                 raise Halt("Stopped from the dashboard")
+            if self._pending_halt:                       # found between updates (Sync): squared off now
+                raise Halt(self._pending_halt)
             if self.mode == "live":
                 try:      # cannot check Zerodha (positions, stops) just now: nothing is sent this moment
+                    self._sync_requested(now)            # first: a Sync books legs the check would stop the session for
                     self.broker.reconcile(now)
                     self._zerodha_ok("reconcile")
                 except Halt:
@@ -363,6 +375,9 @@ class Session:
                         raise
                     except Exception as e:  # noqa: BLE001
                         self._zerodha_failing("positions", f"positions not checked: {type(e).__name__}: {e}")
+                self._tell_strategy()
+                if self.want.get("sync_only"):
+                    return self._finish_sync(now)
             self.stepper.step(now)
             if self.live is not None and self.live.daily_loss_limit > 0 and self.feed.bar_closed:
                 eq = self.stepper.ctx.equity
@@ -373,8 +388,8 @@ class Session:
                     raise Halt(f"Daily loss limit reached (Rs {eq - self.day['start']:,.0f})")
         except Blocked as e:
             self.halt(str(e), square_off=False, now=now)
-        except Halt as e:
-            self.halt(str(e), square_off=True, now=now)
+        except Halt as e:                                # a sync-only run never trades: it stops, the legs stay
+            self.halt(str(e), square_off=not self.want.get("sync_only"), now=now)
 
     FAILING_ALERT_AFTER = 120       # seconds of Zerodha checks failing in a row before an alert
     STOPS_EVERY = 30                # seconds between full reads of the protective stops at Zerodha
@@ -396,6 +411,75 @@ class Session:
                         f"For {int(_time.time() - since)} s: {msg}. "
                         + ("Orders and exits wait until it works again; " if kind == "reconcile" else "")
                         + "protective stops already at Zerodha still work. Check Kite.")
+
+    def _tell_strategy(self) -> None:
+        """Legs squared off in Kite (booked by the broker's sync): the strategy keeps the other legs."""
+        out = getattr(self.broker, "outside", None)
+        while out:
+            c, qty = out.pop(0)
+            try:
+                self.strategy.on_outside_close(self.stepper.ctx, c, qty)
+            except Exception as e:  # noqa: BLE001 - the booking stands; the strategy goes on with what it holds
+                self._log(f"Strategy note on {c.label} closed in Kite failed: {type(e).__name__}: {e}")
+
+    def _sync_requested(self, now) -> bool:
+        """Sync with Zerodha from the dashboard (the SYNC file): book legs squared off in Kite now, without waiting
+        for the minute check. True if a request was handled."""
+        f = self.slot.dir / "SYNC"
+        if not f.exists() and not self.want.get("sync_only"):
+            return False
+        sync = getattr(self.broker, "sync_outside", None)
+        try:
+            done = sync(now, explicit=True) if sync is not None else []
+        except Exception as e:  # noqa: BLE001 - Halt (its stop filled) goes on up; a read error is told, not lost
+            from .live import Halt
+            f.unlink(missing_ok=True)
+            if isinstance(e, Halt):
+                raise
+            self._log(f"Sync with Zerodha failed: {type(e).__name__}: {e}. Press Sync again.")
+            self.notify(f"Algo Lab: Sync failed: {self.slot.id}", f"{type(e).__name__}: {e}. Press Sync again.")
+            self._save_now(now)
+            return True
+        f.unlink(missing_ok=True)
+        self._log("Synced with Zerodha: " + ("; ".join(done) if done else "nothing booked"))
+        self._tell_strategy()
+        self._save_now(now)
+        return True
+
+    def _finish_sync(self, now) -> None:
+        """A stopped session started only to sync with Zerodha (Sync on its card): checked and booked, stopped again."""
+        held = ", ".join(f"{p.qty:+d} {c.label}" for c, p in self.broker.positions.items())
+        self._finish("Synced with Zerodha" + (f"; still held: {held}" if held else "; no open positions") + ".", now)
+
+    def sync_between_updates(self, now) -> None:
+        """Sync from the dashboard while no update is coming (market closed, before the open): Kite's positions and
+        order book can be read then too. A sync-only session stops again once synced."""
+        if self.halted or self.mode != "live":
+            return
+        from .live import Blocked, Halt
+        sync_only = bool(self.want.get("sync_only"))
+        if not sync_only and not (self.slot.dir / "SYNC").exists():
+            return
+        try:
+            self._sync_requested(now)
+            if self.halted:
+                return
+            if sync_only:                                # the whole account checked (no stops placed: sync_only);
+                self.broker.reconcile(now)               # a running session does that at the next update
+            self._tell_strategy()
+            if sync_only:
+                self._finish_sync(now)
+            else:
+                self._save_now(now)
+        except Blocked as e:
+            self.halt(str(e), square_off=False, now=now)
+        except Halt as e:                                # e.g. its stop had filled: square off at the next update
+            if sync_only:                                # a sync-only run never trades: it stops, the legs stay
+                self.halt(str(e), square_off=False, now=now)
+                return
+            self._pending_halt = str(e)
+            self._log(f"{e}: the session squares off at the next market update")
+            self._save_now(now)
 
     def kill_between_updates(self, now) -> None:
         """A Stop from the dashboard while no update is coming (market closed, before the open, between updates).
@@ -605,6 +689,7 @@ class Group:
         self.feed = None
         self.done = False
         self._last_sync = 0.0
+        self.synced: dict = {}       # Kite order id -> units booked as a close in Kite, by any live session
 
     def log(self, msg: str) -> None:
         for s in self.members.values():
@@ -616,7 +701,7 @@ class Group:
             self.members.pop(sid).close()
         for sid, w in want.items():
             m = self.members.get(sid)
-            if m is not None and any(m.want.get(k) != w.get(k) for k in ("params", "feed", "mode", "live", "risk")):
+            if m is not None and any(m.want.get(k) != w.get(k) for k in ("params", "feed", "mode", "live", "risk", "sync_only")):
                 self.members.pop(sid).close()
                 m = None
             if m is None:
@@ -629,6 +714,8 @@ class Group:
                     s.bind(self.feed)
                 if s.mode == "live":   # one Zerodha account: reconciliation counts the other live sessions' legs
                     s.broker.others = lambda me=sid: self.live_qty(exclude=me)
+                    self.synced.update(s.broker.synced)   # Kite orders booked as closes: one record for the account
+                    s.broker.synced = self.synced
                 self.members[sid] = s
         if self.max_bars and self.members and all(s.bars >= self.max_bars for s in self.members.values()):
             self.done = True
@@ -661,6 +748,10 @@ class Group:
                         s.kill_between_updates(ist_now())
                     except Exception as e:  # noqa: BLE001 - one session's problem must not stop the others
                         s.logs.append(f"{ist_now():%Y-%m-%d %H:%M}  Error on Stop: {type(e).__name__}: {e}")
+                    try:
+                        s.sync_between_updates(ist_now())
+                    except Exception as e:  # noqa: BLE001
+                        s.logs.append(f"{ist_now():%Y-%m-%d %H:%M}  Error on Sync: {type(e).__name__}: {e}")
                 self.sync()
             if not self.members or self.done:
                 return False
