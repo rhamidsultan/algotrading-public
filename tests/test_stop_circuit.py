@@ -148,8 +148,50 @@ def test_a_stop_accepted_then_rejected_for_the_circuit_is_placed_again_below_it(
     first.update(status="REJECTED", status_message="RMS: trigger price above upper circuit; try below 442.15")
     k.limit = 442.15
     b.check_protective_stops(NOW + timedelta(seconds=30))        # ...then shown REJECTED
-    assert b.stop_ceiling[c.label] == 442.15
+    assert b.stop_ceiling[c.label][1] == 442.15
     if c.label in b.renew:                                       # placed at this check or the next
         b.check_protective_stops(NOW + timedelta(seconds=60))
     live = [o for o in k.sent("SL") if o["status"] == "TRIGGER PENDING"]
     assert len(live) == 1 and live[0]["trigger"] <= 442.1 and live[0]["price"] <= 442.15
+
+
+def test_a_limit_the_band_has_moved_past_does_not_block_the_stop():
+    """The band widens during the day and the price trades above the old limit: a stop capped there is refused
+    (below the last price, no circuit named), so it is tried again without the old limit."""
+    class Moved(Circuit):
+        def place_order(self, *a, **k):
+            if k.get("order_type") == "SL" and (k.get("trigger_price") or 0) <= self.ltp:
+                raise InputException("Trigger price should be higher than the last traded price.")
+            return super().place_order(*a, **k)
+    k = Moved(date(2026, 10, 13))
+    k.ltp = 0
+    b, c = _sold(k)
+    assert b.stop_ceiling[c.label][1] == 442.15
+    k.limit, k.ltp = 600.0, 450.0                                # later: band 600, price 450
+    b._drop_stop(c.label, keep_level=False)
+    k.sent("SL")[0]["status"] = "CANCELLED"
+    b._place_protect(c, b.symbol_of(c), b.positions[c].avg_price, 65)
+    live = [o for o in k.sent("SL") if o["status"] == "TRIGGER PENDING"]
+    assert len(live) == 1 and 450 < live[0]["trigger"] < 600 and c.label not in b.stop_ceiling
+
+
+def test_the_saved_limit_is_for_one_day_only():
+    k = Circuit(date(2026, 10, 13))
+    b, c = _sold(k)
+    assert b._ceiling_of(c.label) == 442.15
+    b._day = "2099-01-01"
+    assert b._ceiling_of(c.label) is None
+
+
+def test_a_stop_rejected_for_something_else_is_not_sent_again_and_again():
+    """Rejected after it was accepted, not for the circuit (e.g. margin): as before, dropped with one alert, not
+    re-sent at every check (that would use up the day's orders and flood the alerts)."""
+    k = FakeOrders(date(2026, 10, 13))
+    b, c = _sold(k)
+    told = []
+    b.notify = lambda subj, body: told.append(subj)
+    k.sent("SL")[0].update(status="REJECTED", status_message="RMS: Margin exceeds")
+    n = len(k.sent("SL"))
+    for i in range(1, 6):
+        b.check_protective_stops(NOW + timedelta(seconds=30 * i))
+    assert len(k.sent("SL")) == n and told.count("Protective stop gone") == 1
