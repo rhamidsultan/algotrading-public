@@ -4,6 +4,16 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Protective stops below the circuit limit (19 Nov 2026, pull request "stop-circuit-cap")
+
+- Why (19 Nov, intraday_strangle-10): the PE's stop (3 x 157.10 = 471.30) was above its upper circuit limit
+  (442.15); Zerodha refused it, so the leg had no stop from 09:20. Each retry was taken for a lost answer, so at the
+  PE's leg stop (09:29) the session could not rule out a live stop, halted and squared off the CE (in profit) too.
+- Now a stop refused for the circuit limit is placed again at once one tick below it (limit price capped at the
+  circuit): nearer, so it protects more. A refusal from Zerodha (InputException / OrderException, or a circuit
+  message) is never taken for a lost answer: no "may still be at Zerodha" wait, so an exit closes only its own leg.
+  A real lost answer (timeout, dropped connection) still waits, so a stop is never placed twice.
+
 ## Sign-in opens an open LIVE trade first (18 Nov 2026, pull request "login-to-live")
 
 - When a LIVE session holds positions, opening the dashboard (after signing in, and the first time each day) goes
