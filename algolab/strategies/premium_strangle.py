@@ -68,6 +68,15 @@ class PremiumStrangle(Strategy):
                 "note": f"Cycle {c['group']}: call {c['ce']} at {pce:.2f}, put {c['pe']} at {ppe:.2f}, "
                         f"{c['rolls']} rolls; adjusts when one leg > {self.p.ratio:g}x the other"}
 
+    def on_outside_close(self, ctx, contract, qty) -> None:
+        """A leg squared off in Kite: the other leg is kept to its loss limit and expiry exit; no more rolls."""
+        c = self.cycle
+        if c is None or contract in ctx.positions:
+            return
+        if contract.right not in c.setdefault("manual", []):
+            c["manual"].append(contract.right)
+        ctx.log(f"{contract.right} squared off in Kite: the other leg is kept (loss limit and expiry exit), no rolls")
+
     # ---- helpers -------------------------------------------------------
     def _legs(self, ctx):
         ce = next((k for k in ctx.positions if k.right == "CE"), None)
@@ -119,7 +128,9 @@ class PremiumStrangle(Strategy):
         if p.max_loss > 0 and ctx.net_realized - c["start_realized"] + ctx.unrealized <= -p.max_loss:
             return self._exit(ctx, f"Loss limit Rs {p.max_loss:,.0f}")
         ce, pe = self._legs(ctx)
-        if ce is None or pe is None:   # should not happen; tidy up
+        if ce is None or pe is None:
+            if c.get("manual"):        # squared off in Kite: keep the other leg, no rolls
+                return
             return self._exit(ctx, "A leg is missing")
         pce, ppe = ctx.price(ce), ctx.price(pe)
         if min(pce, ppe) <= 0 or max(pce, ppe) <= p.ratio * min(pce, ppe):

@@ -10,6 +10,63 @@ Newest information first within each section.
   to that session on the Live page (`/live#<id>`); with several, to the Live page. Otherwise the profile's start
   page, as before. Only for those who may see Live (`algolab_panel._live_holding_page`).
 
+## Live page review (18 Nov 2026, pull request "live-page-review", needs "remove-shadow")
+
+- Reviewed at phone width, light and dark (ui-review checklist). Changed on LIVE cards: Close all & stop, Resume and
+  Sync carry words, not only an icon; a stopped LIVE session that still holds legs shows a banner (nothing watches
+  them; Resume or square off in Kite and Sync) and STOPPED on the overview, and has no Delete / Reset there.
+- Session chips show the session's name and fit two to a row on a phone; Stop all LIVE is a full-size button; the
+  P&L Overall / Current cycle toggle is a real control (34 px, focus ring).
+- Start a live session lists the strategies that can trade live first, marks the others "Paper only" and opens on a
+  live-ready one.
+
+## Shadow mode removed (18 Nov 2026, pull request "remove-shadow", needs "edit-exit-price")
+
+- The Live pages offer LIVE only: the start form has no Shadow choice, Deploy (from a Paper card) goes to LIVE, the
+  Live › Overview LIVE/SHADOW filter is gone, and `/api/paper/start` refuses mode "shadow". Paper stays as it is.
+- Existing SHADOW sessions (they never sent an order) are stopped and their folders deleted by the dashboard
+  (`algolab_panel._drop_shadow`). The engine still has its no-order path inside (`LiveSettings.mode == "shadow"`,
+  used by tests); nothing can start one.
+
+## Exit prices of closed LIVE legs can be edited (18 Nov 2026, pull request "edit-exit-price", needs "live-resume")
+
+- Live › a session › Closed cycles › a cycle: each leg's exit price has an edit button (owner). The new price replaces
+  the old one in the trade, its exit fill and the realised P&L (charges stay as booked); the leg shows "edited · was
+  <first price>". Nothing is sent to Zerodha. For e.g. a square-off in Kite booked at an estimate.
+- Running session: the dashboard writes `EDITS.json`, the engine applies it within seconds (`LiveBroker.edit_exit`);
+  stopped: the dashboard edits its saved account the same way (`algolab_panel._edit_exit_saved`, tested to match).
+
+## A stopped LIVE session resumes with its own account (18 Nov 2026, pull request "live-resume", needs "kite-sync")
+
+- Why: Resume on a LIVE card only said "start it again from the form", which made a new, empty session: a strategy
+  stopped with legs held (e.g. Blocked) could not continue the next day.
+- Now Resume asks you to type LIVE and restarts the same session: positions, P&L, cycle and stops carry on; the
+  first check reads Zerodha (and syncs legs closed in Kite) before anything is sent.
+- Reset account is hidden (and refused) on a LIVE session that still holds legs: it would forget them.
+
+## Legs squared off in Kite are synced (18 Nov 2026, pull request "kite-sync")
+
+- Why: a live leg squared off by hand in Kite (or the Positions page) stopped the session ("Positions differ from
+  Zerodha") and it could only be reset; after a restart the strategy also exited its other leg ("A leg is missing").
+- Now (`algolab/live.py` `sync_outside`): at the minute check (and the morning check) a leg Zerodha holds less of
+  (all or part) is booked at the price of Hamid's own Kite order: NRML, no Algo Lab tag, placed after the leg was
+  opened, not booked before by any live session. Reason "Closed in Kite"; its stop is cancelled, the rest of a
+  part-closed leg gets a new stop. Positions are read twice and must agree; an empty answer never counts as closed.
+- No such order (closed on an earlier day, or Zerodha's order book is behind): nothing is booked by itself; the
+  session stops as before ("press Sync"). **Sync** on the card then books it at the price now, "Closed in Kite (price
+  estimated)", after reading positions twice. If Zerodha shows no positions at all (every leg closed on an earlier
+  day, or a bad answer), the first press books nothing: press Sync again within 10 minutes.
+- A strategy exit right after a square-off in Kite (before the next check) sends nothing: booked from the Kite order,
+  or Blocked if none is found (a buy-back would open a long).
+- Not synced (the position check stops the session): Zerodha holds more than Algo Lab, or the other way round; a
+  contract another live session also holds; any order still working on it (also one of yours in Kite). A stop that
+  filled stays a stop fill (the session halts and squares off, also if the stop was changed to MARKET in Kite).
+- The strategy keeps its other legs: premium_strangle keeps the cycle, intraday_strangle does not re-enter that leg
+  (`Strategy.on_outside_close`). Alert "Algo Lab: leg squared off in Kite".
+- Live card: **Sync** button (owner only). Running: syncs at once (refused while it is still closing its legs).
+  Stopped: started only to sync; it sends no trades and places no new stops (only a stop resized for the rest of a
+  part-closed leg), never squares off, and stops again.
+
 ## Updates come from the public repo (18 Nov 2026, pull request "updates-from-public")
 
 - GitHub Actions stopped running on the private repo (billing), so work moved to this public repo (main = snapshot
@@ -18,6 +75,7 @@ Newest information first within each section.
 - `deploy/update_source.sh` (run by every update) records `update_repo` (public, https) and `repo` (deploy key: the
   IBKR snapshot, still from the private repo's `ibkr-snapshot` branch, and updates from a private repo). The server's
   copy follows a new update address (`git remote set-url`).
+
 ## Legs held overnight close the next day (17 Nov 2026, pull request "live-next-day-stops", needs 134)
 
 - Why: protective stops are DAY orders. The morning after a short leg was held overnight (premium_strangle,

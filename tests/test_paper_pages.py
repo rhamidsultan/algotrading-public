@@ -45,5 +45,5 @@ def test_session_card_is_compact(tmp_path, monkeypatch):
     (tmp_path / "runtime").mkdir()
     mod = _panel(tmp_path, monkeypatch)
     page = mod.PAGE
-    assert "function posRow" in page and "function cycRow" in page and 'ibtn("kill", "squareoff"' in page
+    assert "function posRow" in page and "function cycRow" in page and 'lb("kill", "squareoff"' in page
     assert "<th>Sold / bought at</th>" not in page            # the wide positions table is gone

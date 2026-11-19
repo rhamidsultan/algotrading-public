@@ -30,7 +30,7 @@ def test_the_pages_carry_the_deploy_flow(app):
 
 def test_a_deployed_session_starts_as_its_own_session_and_the_source_keeps_running(app):
     c, rt = app
-    (rt / "sessions" / "trend-1" / "desired.json").write_text(json.dumps({"strategy": "straddle_trend_switch", "feed": "kite", "mode": "shadow"}))
+    (rt / "sessions" / "trend-1" / "desired.json").write_text(json.dumps({"strategy": "straddle_trend_switch", "feed": "kite", "mode": "paper"}))
     body = {"strategy": "straddle_trend_switch", "feed": "kite", "params": {"lots": 1, "trend_lots": 6}, "mode": "live", "confirm": "LIVE",
             "label": "Long options · live", "live": {"max_lots": "3", "daily_loss_limit": "5000", "max_orders_per_day": "40",
                                                      "allow_over_max_lots": True}}
@@ -39,4 +39,4 @@ def test_a_deployed_session_starts_as_its_own_session_and_the_source_keeps_runni
     sid = r.get_json()["id"]
     want = json.loads((rt / "sessions" / sid / "desired.json").read_text())
     assert sid != "trend-1" and want["mode"] == "live" and want["params"]["trend_lots"] == 6 and want["live"]["max_lots"] == 3
-    assert (rt / "sessions" / "trend-1" / "desired.json").exists()                      # the shadow session keeps running
+    assert (rt / "sessions" / "trend-1" / "desired.json").exists()                      # the paper session keeps running
