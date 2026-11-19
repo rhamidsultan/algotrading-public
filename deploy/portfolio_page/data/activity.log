@@ -1,0 +1,7 @@
+{"ts": "2026-11-19 12:52:39", "user": "", "event": "live_stop_all", "ip": "127.0.0.1", "detail": {"sessions": "['premium_strangle', 'premium_strangle-2', 'premium_strangle-3', 'premium_strang"}}
+{"ts": "2026-11-19 13:01:04", "user": "", "event": "live_stop_all", "ip": "127.0.0.1", "detail": {"sessions": "['premium_strangle', 'premium_strangle-2', 'premium_strangle-3', 'premium_strang"}}
+{"ts": "2026-11-19 13:06:19", "user": "", "event": "live_stop_all", "ip": "127.0.0.1", "detail": {"sessions": "['premium_strangle', 'premium_strangle-2', 'premium_strangle-3', 'premium_strang"}}
+{"ts": "2026-11-19 13:13:22", "user": "", "event": "live_stop_all", "ip": "127.0.0.1", "detail": {"sessions": "['premium_strangle', 'premium_strangle-2', 'premium_strangle-3', 'premium_strang"}}
+{"ts": "2026-11-19 13:16:47", "user": "", "event": "live_stop_all", "ip": "127.0.0.1", "detail": {"sessions": "['premium_strangle', 'premium_strangle-2', 'premium_strangle-3', 'premium_strang"}}
+{"ts": "2026-11-19 13:23:21", "user": "", "event": "live_stop_all", "ip": "127.0.0.1", "detail": {"sessions": "['premium_strangle', 'premium_strangle-2', 'premium_strangle-3', 'premium_strang"}}
+{"ts": "2026-11-19 13:24:07", "user": "", "event": "live_stop_all", "ip": "127.0.0.1", "detail": {"sessions": "['premium_strangle', 'premium_strangle-2', 'premium_strangle-3', 'premium_strang"}}
