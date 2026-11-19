@@ -4,6 +4,14 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## A stopped LIVE session resumes with its own account (18 Nov 2026, pull request "live-resume", needs "kite-sync")
+
+- Why: Resume on a LIVE card only said "start it again from the form", which made a new, empty session: a strategy
+  stopped with legs held (e.g. Blocked) could not continue the next day.
+- Now Resume asks you to type LIVE and restarts the same session: positions, P&L, cycle and stops carry on; the
+  first check reads Zerodha (and syncs legs closed in Kite) before anything is sent.
+- Reset account is hidden (and refused) on a LIVE session that still holds legs: it would forget them.
+
 ## Legs squared off in Kite are synced (18 Nov 2026, pull request "kite-sync")
 
 - Why: a live leg squared off by hand in Kite (or the Positions page) stopped the session ("Positions differ from
