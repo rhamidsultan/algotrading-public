@@ -338,6 +338,7 @@ class Session:
                 raise Halt(self._pending_halt)
             if self.mode == "live":
                 try:      # cannot check Zerodha (positions, stops) just now: nothing is sent this moment
+                    self._edits_requested(now)           # exit prices edited on the card
                     self._sync_requested(now)            # first: a Sync books legs the check would stop the session for
                     self.broker.reconcile(now)
                     self._zerodha_ok("reconcile")
@@ -446,6 +447,26 @@ class Session:
         self._save_now(now)
         return True
 
+    def _edits_requested(self, now) -> bool:
+        """Exit prices of closed legs edited on the card (EDITS.json, a list of {key, price, by, at}) while the session
+        runs: applied to its account here (a stopped session's account is edited by the dashboard)."""
+        f = self.slot.dir / "EDITS.json"
+        edit = getattr(self.broker, "edit_exit", None)
+        if edit is None or not f.exists():
+            return False
+        try:
+            items = json.loads(f.read_text())
+        except (OSError, ValueError):
+            items = []
+        f.unlink(missing_ok=True)
+        for it in items if isinstance(items, list) else []:
+            try:
+                self._log(edit(str(it.get("key")), float(it.get("price")), str(it.get("by") or ""), str(it.get("at") or "")))
+            except (TypeError, ValueError) as e:
+                self._log(f"Exit price not edited ({it.get('key')}): {e}")
+        self._save_now(now)
+        return True
+
     def _finish_sync(self, now) -> None:
         """A stopped session started only to sync with Zerodha (Sync on its card): checked and booked, stopped again."""
         held = ", ".join(f"{p.qty:+d} {c.label}" for c, p in self.broker.positions.items())
@@ -458,9 +479,10 @@ class Session:
             return
         from .live import Blocked, Halt
         sync_only = bool(self.want.get("sync_only"))
-        if not sync_only and not (self.slot.dir / "SYNC").exists():
+        if not sync_only and not (self.slot.dir / "SYNC").exists() and not (self.slot.dir / "EDITS.json").exists():
             return
         try:
+            self._edits_requested(now)
             self._sync_requested(now)
             if self.halted:
                 return

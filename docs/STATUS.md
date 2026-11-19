@@ -4,6 +4,14 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Exit prices of closed LIVE legs can be edited (18 Nov 2026, pull request "edit-exit-price", needs "live-resume")
+
+- Live › a session › Closed cycles › a cycle: each leg's exit price has an edit button (owner). The new price replaces
+  the old one in the trade, its exit fill and the realised P&L (charges stay as booked); the leg shows "edited · was
+  <first price>". Nothing is sent to Zerodha. For e.g. a square-off in Kite booked at an estimate.
+- Running session: the dashboard writes `EDITS.json`, the engine applies it within seconds (`LiveBroker.edit_exit`);
+  stopped: the dashboard edits its saved account the same way (`algolab_panel._edit_exit_saved`, tested to match).
+
 ## A stopped LIVE session resumes with its own account (18 Nov 2026, pull request "live-resume", needs "kite-sync")
 
 - Why: Resume on a LIVE card only said "start it again from the form", which made a new, empty session: a strategy
