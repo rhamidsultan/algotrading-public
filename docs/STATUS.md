@@ -4,6 +4,14 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Shadow mode removed (18 Nov 2026, pull request "remove-shadow", needs "edit-exit-price")
+
+- The Live pages offer LIVE only: the start form has no Shadow choice, Deploy (from a Paper card) goes to LIVE, the
+  Live › Overview LIVE/SHADOW filter is gone, and `/api/paper/start` refuses mode "shadow". Paper stays as it is.
+- Existing SHADOW sessions (they never sent an order) are stopped and their folders deleted by the dashboard
+  (`algolab_panel._drop_shadow`). The engine still has its no-order path inside (`LiveSettings.mode == "shadow"`,
+  used by tests); nothing can start one.
+
 ## Exit prices of closed LIVE legs can be edited (18 Nov 2026, pull request "edit-exit-price", needs "live-resume")
 
 - Live › a session › Closed cycles › a cycle: each leg's exit price has an edit button (owner). The new price replaces
