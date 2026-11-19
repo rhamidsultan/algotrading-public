@@ -1118,10 +1118,13 @@ class LiveBroker(PaperBroker):
         asked = trigger
         if ceiling is None:
             ceiling = self._ceiling_of(label)             # a limit Zerodha named for this leg's stop today
+        quoted = False
         if ceiling is None and _depth == 0:               # the option's upper circuit limit now, from one quote:
-            band = self._touch(sym, "BUY")[1]             # the stop goes below it, so Zerodha does not refuse it
-            if band and band > self.tick and (trigger >= band or round(trigger * 1.1, 2) > band):
-                ceiling = float(band)
+            px, band = self._touch(sym, "BUY")            # the stop goes below it, so Zerodha does not refuse it
+            t = round(math.ceil(round(trigger / self.tick, 6)) * self.tick, 2)
+            lim = round(math.ceil(round(t * 1.1 / self.tick, 6)) * self.tick, 2)
+            if band and band > (px or 0) + self.tick and (t >= band or lim > band):   # a band the price has
+                ceiling, quoted = float(band), True                                     # not passed
                 self.log(f"Protective stop for {label}: trigger {trigger:.2f} is not below the upper circuit limit "
                          f"{band:.2f}; placed just below it")
         if ceiling is not None:                          # below the circuit limit: Zerodha refuses one above it
@@ -1146,7 +1149,7 @@ class LiveBroker(PaperBroker):
                              f"upper circuit limit {top:.2f}; placed just below it instead")
                     return self._place_protect(contract, sym, sold_px, qty, trigger=trigger, ceiling=top,
                                                _depth=_depth + 1)
-                if top is None and ceiling is not None and self.stop_ceiling.pop(label, None) is not None:
+                if top is None and ceiling is not None and (quoted or self.stop_ceiling.pop(label, None) is not None):
                     # capped at a limit the band has since moved past (e.g. the price is above it): try uncapped
                     self.log(f"Protective stop for {label}: refused below the old circuit limit {ceiling:.2f} ({e}); "
                              "trying without it")

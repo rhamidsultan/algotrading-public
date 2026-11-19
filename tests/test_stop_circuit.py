@@ -214,3 +214,43 @@ def test_the_circuit_limit_is_read_first_so_the_first_stop_is_not_refused():
     stops = k.sent("SL")
     assert len(stops) == 1 and stops[0]["trigger"] == 442.1 and stops[0]["price"] <= 442.15
     assert not getattr(k, "refused", 0)                          # placed below it the first time
+
+
+def test_a_band_from_the_quote_that_the_price_has_passed_does_not_block_the_stop():
+    """The quote says 300 but the price is 320 (stale band): not used; and a capped stop refused for another reason
+    is tried once without the cap."""
+    class Stale(Circuit):
+        def quote(self, symbols):
+            out = super().quote(symbols)
+            for s in symbols:
+                if s.startswith("NFO:"):
+                    out[s].update(upper_circuit_limit=300.0, last_price=320.0,
+                                  depth={"buy": [{"price": 319.9}], "sell": [{"price": 320.1}]})
+            return out
+    k = Stale(date(2026, 10, 13))
+    k.limit = 1000.0
+    b, c = _sold(k)
+    live = [o for o in k.sent("SL") if o["status"] == "TRIGGER PENDING"]
+    assert len(live) == 1 and live[0]["trigger"] > 320 and c.label not in b.renew
+
+
+def test_a_capped_stop_refused_for_another_reason_is_tried_once_uncapped():
+    """The quote's band (442.15) is lower than Zerodha's real one (1000) and Zerodha refuses the capped stop for
+    another reason: tried once at 3x, which goes through."""
+    class Below(Circuit):
+        def quote(self, symbols):
+            out = super().quote(symbols)
+            for s in symbols:
+                if s.startswith("NFO:"):
+                    out[s]["upper_circuit_limit"] = 442.15
+            return out
+
+        def place_order(self, *a, **k):
+            if k.get("order_type") == "SL" and (k.get("trigger_price") or 0) < 450:
+                raise InputException("Trigger price should be higher than the last traded price.")
+            return super().place_order(*a, **k)
+    k = Below(date(2026, 10, 13))
+    k.limit = 1000.0
+    b, c = _sold(k)
+    live = [o for o in k.sent("SL") if o["status"] == "TRIGGER PENDING"]
+    assert len(live) == 1 and live[0]["trigger"] > 450 and c.label not in b.renew and not b.pending_stop
