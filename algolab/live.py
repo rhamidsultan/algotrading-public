@@ -1471,8 +1471,8 @@ class LiveBroker(PaperBroker):
                 if again:                              # refused for the circuit limit: the next one goes below it
                     self.stop_ceiling[label] = (self._day, top)
                     self.renew.add(label)              # it bought nothing: placed again at the next check
-                if ("gone", label, self._day) not in self._told:      # once a day per leg
-                    self._told.add(("gone", label, self._day))
+                if ("gone", label, oid) not in self._told:            # once per lost stop
+                    self._told.add(("gone", label, oid))
                     self.notify("Protective stop gone", f"{label}: Zerodha shows it {status.lower()}"
                                 + (f" ({last.get('status_message')})" if last.get("status_message") else "")
                                 + (". The leg is unprotected; Algo Lab places a new one below the circuit limit at the "
