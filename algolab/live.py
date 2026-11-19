@@ -229,6 +229,7 @@ class LiveBroker(PaperBroker):
         self._mismatch_prev: set = set()           # symbols that differed at the last position check
         self.synced: dict[str, int] = {}           # Kite order id -> units of it already booked as a close in Kite
         self._sync_seen: set = set()               # symbols seen with less at Zerodha, no Kite order found yet
+        self.stop_ceiling: dict[str, float] = {}   # label -> upper circuit limit Zerodha named for its stop
         self.outside: list = []                    # (contract, units) closed in Kite, for the strategy (on_outside_close)
         self.exit_edits: dict[str, dict] = {}      # trade key -> {"was", "price", "by", "at"}: exit prices edited by hand
 
@@ -1052,19 +1053,31 @@ class LiveBroker(PaperBroker):
 
     @staticmethod
     def _answered_no(e: Exception) -> bool:
-        """Zerodha answered and refused the order (input or order checks, e.g. a trigger above the circuit limit): no
-        order was made. Not a lost answer (a timeout or a dropped connection), after which it may have got there."""
-        return type(e).__name__ in ("InputException", "OrderException") or "circuit" in str(e).lower()
+        """Zerodha answered and refused the order's inputs, so no order was made: an InputException, or an
+        OrderException with a 4xx code. Never anything else (a timeout, a dropped connection, a gateway page that
+        could not be read, an order-system error with code 500): the order may then have got there, and it is
+        looked for before another is sent. Decided by the type and code only, never by words in the text."""
+        name, code = type(e).__name__, getattr(e, "code", None)
+        if name == "InputException":
+            return True
+        return name == "OrderException" and isinstance(code, int) and 400 <= code < 500
+
+    @staticmethod
+    def _named_ceiling(text: str) -> float | None:
+        """The upper circuit limit a refusal names ("... trigger price below 442.15"), None if none."""
+        if "circuit" not in str(text).lower():
+            return None
+        m = re.search(r"below\s+(?:Rs\.?\s*)?([0-9]+(?:\.[0-9]+)?)", str(text))
+        return float(m.group(1)) if m else None
 
     def _circuit_ceiling(self, e: Exception, sym: str) -> float | None:
-        """The upper circuit limit a refused stop ran into: the number Zerodha names ("... trigger price below
-        442.15"), else the limit from a quote. None if the refusal was about something else."""
-        text = str(e)
-        if "circuit" not in text.lower():
+        """The upper circuit limit a refused stop ran into: the number Zerodha names, else the limit from a quote.
+        None if the refusal was about something else."""
+        if "circuit" not in str(e).lower():
             return None
-        m = re.search(r"below\s+(?:Rs\.?\s*)?([0-9]+(?:\.[0-9]+)?)", text)
-        if m:
-            return float(m.group(1))
+        top = self._named_ceiling(str(e))
+        if top is not None:
+            return top
         band = self._touch(sym, "BUY")[1]
         return float(band) if band else None
 
@@ -1093,6 +1106,8 @@ class LiveBroker(PaperBroker):
                 return True
         if trigger is None:
             trigger = sold_px * self.s.protect_mult
+        if ceiling is None:
+            ceiling = self.stop_ceiling.get(label)       # a limit Zerodha named for this leg's stop today
         if ceiling is not None:                          # below the circuit limit: Zerodha refuses one above it
             trigger = min(trigger, math.floor(round(ceiling / self.tick, 6) - 1) * self.tick)
         trigger = round(math.ceil(round(trigger / self.tick, 6)) * self.tick, 2)
@@ -1106,11 +1121,13 @@ class LiveBroker(PaperBroker):
                                         trigger_price=trigger, validity="DAY", tag=tag)
         except Exception as e:  # noqa: BLE001 - it may still have reached Zerodha: look for it before anything else
             refused = self._answered_no(e)
-            if refused and ceiling is None:
+            if refused:
                 top = self._circuit_ceiling(e, sym)
-                if top is not None and top > self.tick and trigger >= top:
-                    self.log(f"Protective stop for {label}: trigger {trigger:.2f} is above the upper circuit limit "
-                             f"{top:.2f}; placed just below it instead")
+                if top is not None and top > self.tick and (trigger >= top or limit > top) \
+                        and (ceiling is None or top < ceiling - self.tick / 2):      # each retry lower: it ends
+                    self.stop_ceiling[label] = top
+                    self.log(f"Protective stop for {label}: trigger {trigger:.2f} / limit {limit:.2f} not below the "
+                             f"upper circuit limit {top:.2f}; placed just below it instead")
                     return self._place_protect(contract, sym, sold_px, qty, trigger=trigger, ceiling=top)
             found, unread = None, False
             for n in range(1 if refused else self.LOOKUPS_AFTER_ERROR):
@@ -1129,8 +1146,9 @@ class LiveBroker(PaperBroker):
             if found is None and not refused:   # not listed (yet): kept until a read rules it out, never doubled
                 self.pending_stop[label] = {"tag": tag, "at": _time.time()}
             self.renew.add(label)  # tried again at each check while the session runs
-            msg = (f"{sym}: {e}. The short leg is unprotected at Zerodha; Algo Lab tries again at each check while "
-                   "the session runs.")
+            msg = (f"{sym}: {e}. " + ("Zerodha refused it (if the option is at its circuit limit, no stop can be "
+                   "placed until it moves). " if refused else "") + "The short leg is unprotected at Zerodha; Algo Lab "
+                   "tries again at each check while the session runs.")
             self.log(f"Protective stop NOT placed: {msg}")
             if ("noplace", label, self._day) not in self._told:      # once a day per leg (retries are logged)
                 self._told.add(("noplace", label, self._day))
@@ -1237,6 +1255,9 @@ class LiveBroker(PaperBroker):
             self.log(f"SHADOW (not sent): protective stop for {label} moved to trigger {trig:.2f}")
             return
         limit = round(math.ceil(round(trig * 1.1 / self.tick, 6)) * self.tick, 2)
+        top = self.stop_ceiling.get(label)
+        if top is not None:                              # never above the circuit limit Zerodha named
+            limit = round(max(trig, min(limit, math.floor(round(top / self.tick, 6)) * self.tick)), 2)
         try:
             self.kite.modify_order(variety="regular", order_id=self.protect[label], trigger_price=trig, price=limit)
         except Exception as e:  # noqa: BLE001 - the engine's own stop still works; say so once
@@ -1430,7 +1451,14 @@ class LiveBroker(PaperBroker):
                 hit.append(label)
             elif status in ("REJECTED", "CANCELLED"):
                 self._drop_stop(label, keep_level=False)
-                self.notify("Protective stop gone", f"{label}: Zerodha shows it {status.lower()}. The leg is unprotected.")
+                top = self._named_ceiling(last.get("status_message") or "")
+                if top is not None:                    # refused for the circuit limit: the next one goes below it
+                    self.stop_ceiling[label] = top
+                if c is not None:
+                    self.renew.add(label)              # it bought nothing: placed again at the next check
+                self.notify("Protective stop gone", f"{label}: Zerodha shows it {status.lower()}"
+                            + (f" ({last.get('status_message')})" if last.get("status_message") else "")
+                            + ". The leg is unprotected; Algo Lab places a new stop at the next check.")
         if hit:      # first: the session squares off (each leg's stop is read again there, gone ones included)
             raise Halt("Protective stop filled at Zerodha for " + ", ".join(hit))
         if from_stream:

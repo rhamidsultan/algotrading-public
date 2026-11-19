@@ -18,7 +18,7 @@ class Circuit(FakeOrders):
     say_number = True
 
     def place_order(self, *a, **k):
-        if k.get("order_type") == "SL" and (k.get("trigger_price") or 0) >= self.limit:
+        if k.get("order_type") == "SL" and ((k.get("trigger_price") or 0) >= self.limit or (k.get("price") or 0) > self.limit):
             self.refused = getattr(self, "refused", 0) + 1
             raise InputException("Trigger price for stoploss buy orders cannot be above the upper circuit price."
                                  + (f" Please try placing the order with trigger price below {self.limit}." if self.say_number else ""))
@@ -89,3 +89,67 @@ def test_a_lost_answer_still_waits():
             return super().place_order(*a, **k)
     b, c = _sold(Slow(date(2026, 10, 13)))
     assert c.label in b.pending_stop
+
+
+def test_a_limit_price_above_the_circuit_is_capped_too():
+    """Sold at 140: trigger 420 is below the limit 442.15, but its limit price 462 is not."""
+    k = Circuit(date(2026, 10, 13))
+    b, c = _sold(k, px=140.1)
+    stops = k.sent("SL")
+    assert len(stops) == 1 and stops[0]["trigger"] < 442.15 and stops[0]["price"] <= 442.15
+    assert stops[0]["price"] >= stops[0]["trigger"] and not b.pending_stop
+
+
+class DataException(Exception):
+    pass
+
+
+class OrderException(Exception):
+    def __init__(self, msg, code):
+        super().__init__(msg)
+        self.code = code
+
+
+def test_errors_that_may_hide_a_placed_order_still_wait():
+    """A gateway page that could not be read (it may mention a 'circuit breaker') or an order-system error with code
+    500: the order may have got there, so no second stop is sent until it is ruled out."""
+    for err in (DataException("Couldn't parse the JSON response: <html>upstream circuit breaker open</html>"),
+                OrderException("Order system timed out", 500)):
+        class Lost(FakeOrders):
+            def place_order(self, *a, **k):
+                if k.get("order_type") == "SL":
+                    super().place_order(*a, **k)                 # it got there...
+                    self.orders[str(self.n)]["tag"] = "hidden"   # ...but the order book does not show it yet
+                    raise err
+                return super().place_order(*a, **k)
+        k = Lost(date(2026, 10, 13))
+        b, c = _sold(k)
+        assert c.label in b.pending_stop, type(err).__name__
+        n = len(k.sent("SL"))
+        b.check_protective_stops(NOW + timedelta(seconds=30))
+        assert len(k.sent("SL")) == n                            # no second stop while it may be live
+
+
+def test_an_order_exception_with_a_4xx_code_is_a_refusal():
+    class Refuses(FakeOrders):
+        def place_order(self, *a, **k):
+            if k.get("order_type") == "SL":
+                raise OrderException("Order rejected by RMS", 400)
+            return super().place_order(*a, **k)
+    b, c = _sold(Refuses(date(2026, 10, 13)))
+    assert not b.pending_stop and c.label in b.renew
+
+
+def test_a_stop_accepted_then_rejected_for_the_circuit_is_placed_again_below_it():
+    k = Circuit(date(2026, 10, 13))
+    k.limit = 10_000                                             # accepted at first...
+    b, c = _sold(k)
+    first = k.sent("SL")[0]
+    first.update(status="REJECTED", status_message="RMS: trigger price above upper circuit; try below 442.15")
+    k.limit = 442.15
+    b.check_protective_stops(NOW + timedelta(seconds=30))        # ...then shown REJECTED
+    assert b.stop_ceiling[c.label] == 442.15
+    if c.label in b.renew:                                       # placed at this check or the next
+        b.check_protective_stops(NOW + timedelta(seconds=60))
+    live = [o for o in k.sent("SL") if o["status"] == "TRIGGER PENDING"]
+    assert len(live) == 1 and live[0]["trigger"] <= 442.1 and live[0]["price"] <= 442.15
