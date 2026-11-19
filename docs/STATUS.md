@@ -4,6 +4,12 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Sign-in opens an open LIVE trade first (18 Nov 2026, pull request "login-to-live")
+
+- When a LIVE session holds positions, opening the dashboard (after signing in, and the first time each day) goes
+  to that session on the Live page (`/live#<id>`); with several, to the Live page. Otherwise the profile's start
+  page, as before. Only for those who may see Live (`algolab_panel._live_holding_page`).
+
 ## Live page review (18 Nov 2026, pull request "live-page-review", needs "remove-shadow")
 
 - Reviewed at phone width, light and dark (ui-review checklist). Changed on LIVE cards: Close all & stop, Resume and

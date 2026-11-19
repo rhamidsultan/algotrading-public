@@ -3985,14 +3985,33 @@ def _old_blaze_page():
 def _start_page():
     """Once per sign-in, opening the dashboard's home goes to the start page chosen in the profile."""
     try:
-        if request.method == "GET" and request.path == "/" and session.get("user") and not session.get("landed"):
-            session["landed"] = True
-            target = load_profile().get("start_page", "/")
-            if target != "/" and target in START_PAGES and path_allowed(target):
-                return redirect(target)
+        if request.method == "GET" and request.path == "/" and session.get("user"):
+            today = time.strftime("%Y-%m-%d")
+            if session.get("live_landed") != today:   # once per sign-in and per day: an open LIVE trade comes first
+                session["live_landed"] = today
+                target = _live_holding_page()
+                if target:
+                    session["landed"] = True
+                    return redirect(target)
+            if not session.get("landed"):
+                session["landed"] = True
+                target = load_profile().get("start_page", "/")
+                if target != "/" and target in START_PAGES and path_allowed(target):
+                    return redirect(target)
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _live_holding_page():
+    """The page to open first when LIVE sessions hold positions: that session on the Live page, or the Live page
+    for several. None if none does (or Live may not be seen)."""
+    if not path_allowed("/live"):
+        return None
+    ids = [x["id"] for x in _slots() if _mode(x) == "live" and ((_json(x["state"]) or {}).get("positions"))]
+    if not ids:
+        return None
+    return "/live#" + ids[0] if len(ids) == 1 else "/live"
 
 
 HTML_FILTERS = []   # more page additions (pwa_panel: app manifest, sign-in with Face ID)
