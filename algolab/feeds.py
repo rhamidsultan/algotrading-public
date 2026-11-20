@@ -407,6 +407,10 @@ class Feed:
     now: datetime
     spot: float
     vix: float | None = None
+    # the exchange's previous close (NIFTY, VIX) when the feed knows it (live: Zerodha's quote). None in backtests,
+    # where the strategy's own daily record holds full days.
+    prev_close: float | None = None
+    prev_vix_close: float | None = None
 
     def __init__(self, cfg: dict):
         m = cfg["market"]

@@ -4,6 +4,15 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Gap and VIX-spike filters use the exchange's previous close (20 Nov 2026, pull request "gap-prev-close")
+
+- Why: 20 Nov, "No trade today: NIFTY +1.34% from yesterday's close (trend/gap day)" was wrong. The filter took the
+  last NIFTY the session saw as yesterday's close; the session had stopped at 09:30 on 19 Nov, so it compared with
+  09:30, not the close.
+- Now live and paper on Zerodha prices read the previous close of NIFTY and VIX from Zerodha's quote (`ohlc.close`,
+  one request a day, `KiteFeed._load_previous_close`) and the gap and VIX-spike filters use it; the strategy's daily
+  record is corrected too. Backtests are unchanged (full days in the data).
+
 ## Protective stops below the circuit limit (19 Nov 2026, pull request "stop-circuit-cap")
 
 - Why (19 Nov, intraday_strangle-10): the PE's stop (3 x 157.10 = 471.30) was above its upper circuit limit

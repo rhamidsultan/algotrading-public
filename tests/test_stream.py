@@ -182,7 +182,9 @@ def test_feed_uses_the_stream_and_falls_back_to_polling(tmp_path, monkeypatch):
     feed = kite.KiteFeed(fake, cfg, control=Tick(), log=lambda m: None, stream=st)
     it = iter(feed)
     assert next(it) == datetime(2026, 10, 7, 10, 0) and feed.source == "stream"
-    assert feed.spot == 24005.0 and feed.vix == 12.9 and calls == []        # no quote request at all
+    assert feed.spot == 24005.0 and feed.vix == 12.9
+    assert calls == [["NSE:NIFTY 50", "NSE:INDIA VIX"]]    # only the day's previous close (once a day)
+    calls.clear()
     c = Contract("NIFTY", date(2026, 10, 13), 24000, "CE")
     assert feed.quote(c).last == 101.0 and len(calls) == 1                  # first use: not streamed yet
     st.ticks[240000] = {"last": 103.0, "bid": 102.5, "ask": 103.5}
