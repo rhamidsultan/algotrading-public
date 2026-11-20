@@ -48,6 +48,7 @@ class RegimeFilter:
         self.days: list = []        # [[date, close, vix_close]] for completed days, newest last
         self.today: list | None = None
         self._told = False
+        self._bad: set = set()
 
     def get_state(self) -> dict:
         return {"days": self.days[-40:], "today": self.today}
@@ -64,6 +65,8 @@ class RegimeFilter:
             self.days = self.days[-40:]
             self.today = None
         real = getattr(ctx, "prev_close", None)
+        if real and ctx.spot and abs((ctx.spot / real - 1) * 100) > self.MAX_PLAUSIBLE_GAP:
+            real = None                              # a bad reading never overwrites the record
         if real and self.days and self.days[-1][0] == _last_weekday_before(ctx.now.date()).isoformat():
             # the last day this session saw may have ended early (stopped, restarted): the exchange's close wins
             self.days[-1][1] = float(real)
@@ -79,6 +82,25 @@ class RegimeFilter:
 
     def prev_close(self):
         return self.days[-1][1] if self.days else None
+
+    MAX_PLAUSIBLE_GAP = 8.0   # % - NIFTY halts at a 10% move: a "close" further away than this is a bad reading
+
+    def _usable_close(self, ctx):
+        """Yesterday's close for the gap filter and where it came from: the exchange's (live), else this session's
+        own record. One that would put NIFTY more than MAX_PLAUSIBLE_GAP % away is a bad reading and not used
+        (20 Nov: "+11.94%"); the filter is then skipped for that check and the log says why, once."""
+        spot = getattr(ctx, "spot", None)
+        for val, src in ((getattr(ctx, "prev_close", None), "Zerodha"), (self.prev_close(), "this session's record")):
+            if not val:
+                continue
+            if spot and abs((spot / val - 1) * 100) > self.MAX_PLAUSIBLE_GAP:
+                if (src, round(val, 2)) not in self._bad:
+                    self._bad.add((src, round(val, 2)))
+                    ctx.log(f"Gap filter: yesterday's close from {src} ({val:,.2f}) is {(spot / val - 1) * 100:+.1f}% "
+                            f"from NIFTY {spot:,.2f}: not believable, not used")
+                continue
+            return float(val), src
+        return None, ""
 
     def realised_vol(self, n: int) -> float | None:
         closes = [x[1] for x in self.days[-(n + 1):]]
@@ -107,12 +129,13 @@ class RegimeFilter:
                         return f"VIX up {(vix / prev_vix - 1) * 100:.0f}% on the day"
                 else:
                     missing.append("VIX spike")
-        prev = getattr(ctx, "prev_close", None) or self.prev_close()   # live: the exchange's previous close
+        prev, src = self._usable_close(ctx)
         if p.gap_pct > 0:
             if prev:
                 move = (ctx.spot / prev - 1) * 100
                 if abs(move) > p.gap_pct:
-                    return f"NIFTY {move:+.2f}% from yesterday's close (trend/gap day)"
+                    return (f"NIFTY {move:+.2f}% from yesterday's close (trend/gap day): {ctx.spot:,.2f} now, "
+                            f"close {prev:,.2f} ({src})")
             else:
                 missing.append("gap")
         if p.iv_rv_min > 0 and vix is not None:
