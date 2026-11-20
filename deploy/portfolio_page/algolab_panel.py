@@ -585,6 +585,26 @@ def _preset_ref(strategy, ref):
     return {"id": str(pid), "name": p["name"], "version": p.get("version", 1)} if p else None
 
 
+_SKIP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T][\d:]+\s+No (?:trade|entry) today: (.+)$")
+
+
+def _skipped_today(s):
+    """The strategy's "no trade today" reason when it is today's last word and nothing is open (Re-check on the card)."""
+    if s.get("positions"):
+        return ""
+    today = str(s.get("time") or "")[:10]
+    for line in reversed(s.get("logs") or []):
+        line = str(line)
+        if not line.startswith(today):
+            break
+        if line.split(None, 2)[-1].startswith("Re-check:"):
+            return ""
+        m = _SKIP_RE.match(line)
+        if m:
+            return m.group(2)
+    return ""
+
+
 def _session_view(x):
     s = _json(x["state"])
     desired = _json(x["desired"])
@@ -593,6 +613,7 @@ def _session_view(x):
     out = {"id": x["id"], "running": running, "desired": desired, "waiting": "", "session": None, "equity": [],
            "strategy": info.get("strategy", x["id"]), "label": info.get("label", ""), "mode": info.get("mode", "paper"),
            "stopped_because": "", "killing": (x["state"].parent / "KILL").exists(),
+           "archived": x["state"].parent != RT and (x["state"].parent / "archived").exists(), "skipped_today": "",
            "started_by": (_json(x["state"].parent / "started_by.json", {}) or {}).get("user", "")
            if x["state"].parent != RT else ""}
     try:
@@ -617,6 +638,7 @@ def _session_view(x):
             "log": s.get("logs", [])[-60:][::-1], "calendar": _calendar(b["trades"]),
             "closed_legs": _closed_legs(b),
         }
+        out["skipped_today"] = _skipped_today(s)
         an = _pnl_analysis(x["equity"], b["capital"], b["trades"])
         out["equity"] = an["points"]
         out["pnl"] = {"hi": an["hi"], "lo": an["lo"], "daily": an["daily"][-120:], "metrics": an["metrics"]}
@@ -971,6 +993,7 @@ def api_start():
     d.mkdir(parents=True, exist_ok=True)
     (d / "STOP").unlink(missing_ok=True)
     (d / "status.txt").unlink(missing_ok=True)
+    (d / "archived").unlink(missing_ok=True)       # started again: back on the page
     _write(d / "desired.json", want)
     try:
         _write(d / "started_by.json", {"user": current_user(), "at": time.strftime("%Y-%m-%d %H:%M")})
@@ -996,6 +1019,47 @@ def _target():
 
 
 LIVE_KEYS = ("max_lots", "daily_loss_limit", "max_orders_per_day", "protect_mult", "allow_over_max_lots")
+
+
+@panel.route("/api/paper/recheck", methods=["POST"])
+def api_recheck():
+    """A running session's strategy forgets today's "no trade today" decision: its entry filters run again at the
+    next bar, within its entry window (e.g. after a wrong reading at the entry time)."""
+    x = _target()
+    if not x:
+        return jsonify(error="No such session."), 404
+    if not (x["desired"].exists() and _age(x["beat"]) < 15):
+        return jsonify(error="The session is not running: resume it first."), 400
+    _write(x["state"].parent / "RECHECK", {"by": current_user() or owner_name(), "at": time.strftime("%Y-%m-%d %H:%M")})
+    return jsonify(ok=True)
+
+
+@panel.route("/api/paper/archive", methods=["POST"])
+def api_archive():
+    """Move stopped sessions to the archive (hidden from the lists, kept with their history), or back. A running
+    session, or a LIVE one still holding legs, is not archived."""
+    body = request.get_json(silent=True) or {}
+    ids = [str(i) for i in body.get("ids") or []][:200]
+    back = body.get("archive") is False
+    done, refused = [], []
+    for sid in ids:
+        x = _slot(sid)
+        if not x or x["state"].parent == RT:
+            refused.append({"id": sid, "why": "not found"})
+            continue
+        d, st = x["state"].parent, _json(x["state"]) or {}
+        if back:
+            (d / "archived").unlink(missing_ok=True)
+            done.append(sid)
+            continue
+        if x["desired"].exists() or _age(x["beat"]) < 15:
+            refused.append({"id": sid, "why": "running: stop it first"})
+        elif _mode(x) == "live" and st.get("positions"):
+            refused.append({"id": sid, "why": "still holds legs at Zerodha"})
+        else:
+            _write(d / "archived", {"by": current_user() or owner_name(), "at": time.strftime("%Y-%m-%d %H:%M")})
+            done.append(sid)
+    return jsonify(ok=True, done=done, refused=refused)
 
 
 @panel.route("/api/paper/sync", methods=["POST"])
@@ -5194,6 +5258,11 @@ h3{font-size:13px;color:var(--muted);margin:14px 0 6px;font-weight:600}
 .stopped.legs{background:color-mix(in srgb,var(--warn) 10%,var(--card));line-height:1.45}
 .ibtn.lbl span{font-size:13px;font-weight:600}
 .badge.idle{border-color:var(--warn);color:var(--warn)}
+.archbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 2px}.archbar .ibtn{min-height:34px;padding:0 12px;width:auto}
+.archbar .muted{font-size:12px}
+.srow.pick{cursor:pointer}.srow.pick input{width:20px;height:20px;margin:0 8px 0 0;flex:none;accent-color:var(--accent)}.srow.pick.off{opacity:.55;cursor:default}
+details.archived{margin-top:12px}details.archived>summary{cursor:pointer;font-size:13px;color:var(--muted);min-height:32px;display:flex;align-items:center}
+.srow.arow .lnk{background:none;border:0;color:var(--accent);font:inherit;font-size:13px;cursor:pointer;min-height:32px;padding:0 4px}
 .pnlseg{display:inline-flex;gap:0;margin:2px 0 6px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .pnlseg button{font:inherit;font-size:13px;min-height:34px;padding:0 12px;border:0;background:none;color:var(--text);cursor:pointer}
 .pnlseg button.on{background:var(--accent);color:#fff}
@@ -5332,7 +5401,9 @@ details.sec>summary .st{display:inline-flex;align-items:center;gap:6px}
       </div>
       <div class="tsub" id="grandSub"></div>
       <div class="tsub livectl hide" id="liveCtl"></div>
+      <div class="archbar hide" id="archBar"></div>
       <div class="slist" id="summary"></div>
+      <details class="archived hide" id="archived"><summary></summary><div class="slist" id="archList"></div></details>
     </div>
     <div class="card chipcard" id="chipCard"><div class="chips" id="chips"></div></div>
     <div id="detail"></div>
@@ -5435,7 +5506,7 @@ else if (!NEWVIEW) $("totalCard").classList.add("hide");   // Sessions: strategi
 $("newBtn").href = "/" + KIND + "/new";
 $("dlAll").href = "/api/paper/metrics.csv?kind=" + KIND;
 const MODE_FILTER = false, modeFilter = "all";   // Live shows LIVE sessions only (Shadow mode was removed)
-const shown = () => last.sessions || [];
+const shown = () => (last.sessions || []).filter(x => !x.archived);   // archived: their own list below
 $("grandLabel").textContent = "Total";
 $("footNote").textContent = LIVEPAGE
   ? "LIVE sessions send real orders to Zerodha. Several LIVE sessions may run at once, each with its own lots, orders and daily loss limit, and may hold the same contract; before its first order each one checks that Zerodha's positions equal the sum of all LIVE sessions' legs. Every Zerodha charge is deducted."
@@ -5716,6 +5787,9 @@ async function act(kind, id, btn) {
       }
       await post("/api/paper/start", {id, strategy: s.strategy, feed: s.feed, params: s.params, mode: s.mode || "paper", live: s.live, label: x.label, risk: s.risk || (x.desired || {}).risk, preset: (x.desired || {}).preset || s.preset, confirm});
       if (confirm) flash("Resuming LIVE: it checks Zerodha first.");
+    } else if (kind === "recheck") {
+      await post("/api/paper/recheck", {id});
+      flash("Re-checking: the entry filters run again within a few seconds.");
     } else if (kind === "sync") {
       const j = await post("/api/paper/sync", {id});
       flash(j.started ? "Syncing with Zerodha: it reads Kite, sends no trades and stops again in a moment." : "Syncing with Zerodha now.");
@@ -5749,7 +5823,9 @@ function sessionCard(x) {
       + (live && held ? "" : ibtn("delete", "trash", "Delete session", "", armedD ? "Tap again to delete" : ""));
   const syncBtn = mode === "live" && s && !x.killing && !(d.sync_only)
     ? lb("sync", "sync", "Sync with Zerodha: book legs you squared off in Kite", "", "Sync") : "";
-  const copyBtn = syncBtn + ibtn("copy", "copy", "Copy to a new session")
+  const recheckBtn = x.skipped_today && isOn(x) && !x.killing
+    ? lb("recheck", "reset", "Re-check today: forget today's no-trade decision and run the entry filters again", "", "Re-check today") : "";
+  const copyBtn = recheckBtn + syncBtn + ibtn("copy", "copy", "Copy to a new session")
     + (mode === "paper" ? `<button type="button" class="ibtn pri dep" data-act="deploy" title="Deploy to LIVE with the same settings">${icon("deploy", "Deploy")}<span>Deploy</span></button>` : "");
   const badge = LIVEPAGE || mode !== "paper" ? `<span class="badge ${mode}">${mode.toUpperCase()}</span>` : "";
   const lim = (d.live || (s && s.live)) || null;
@@ -5757,6 +5833,7 @@ function sessionCard(x) {
   const margin = MG().sessions[x.id] ? `<span class="chip2" title="Margin for its open legs">${icon("wallet", "Margin for its open legs")} ${lakh(MG().sessions[x.id])}</span>` : "";
   const who = x.started_by ? `<span class="chip2" title="Started by ${esc(x.started_by)}">${icon("user", "Started by")} ${esc(x.started_by)}</span>` : "";
   const stoppedNote = (x.stopped_because ? `<div class="stopped">Stopped by itself: ${esc(x.stopped_because)}</div>` : "")
+    + (x.skipped_today && isOn(x) ? `<div class="stopped">No trade today: ${esc(x.skipped_today)}. If that reading was wrong, tap <b>Re-check today</b>: the entry filters run again now (until the strategy's last entry time).</div>` : "")
     + (live && held && !isOn(x) ? `<div class="stopped legs"><b>Stopped with ${s.positions.length} open leg${s.positions.length > 1 ? "s" : ""} at Zerodha.</b> Nothing watches ${s.positions.length > 1 ? "them" : "it"} now, and protective stops are day orders that end at the close. Tap <b>Resume</b> to carry on, or square off in Kite and tap <b>Sync</b>.</div>` : "");
   let body = '<div class="empty">No updates yet.</div>';
   if (s) {
@@ -6140,8 +6217,48 @@ function select(id) {
 }
 
 const amt = x => x == null ? "–" : (x < 0 ? "-" : "") + Math.abs(x).toLocaleString("en-IN", {maximumFractionDigits: 0});
+// ---- archive: stopped sessions hidden from the lists (kept with their history), several at once ----------------
+let picking = false;
+const picked = new Set();
+function renderArchive() {
+  const all = last.sessions || [], arch = all.filter(x => x.archived), bar = $("archBar"), box = $("archived");
+  const can = x => !(x.desired || x.running) && !(((x.session || {}).mode || (x.desired || {}).mode) === "live" && ((x.session || {}).positions || []).length);
+  bar.classList.toggle("hide", !all.length);
+  const n = [...picked].filter(id => all.some(x => x.id === id && !x.archived)).length;
+  bar.innerHTML = picking
+    ? `<button type="button" class="ibtn" id="archCancel">Done</button><button type="button" class="ibtn pri" id="archGo" ${n ? "" : "disabled"}>Move ${n || ""} to archive</button><span class="muted">Stopped sessions only (a LIVE one with open legs stays).</span>`
+    : `<button type="button" class="ibtn" id="archPick" title="Choose sessions to move to the archive">Select</button>`;
+  const pick = $("archPick"); if (pick) pick.onclick = () => { picking = true; picked.clear(); renderSummary(); renderArchive(); };
+  const cancel = $("archCancel"); if (cancel) cancel.onclick = () => { picking = false; picked.clear(); renderSummary(); renderArchive(); };
+  const go = $("archGo"); if (go) go.onclick = async () => {
+    try {
+      const j = await post("/api/paper/archive", {ids: [...picked], archive: true});
+      flash(`${j.done.length} moved to the archive` + (j.refused.length ? `; ${j.refused.length} not (${j.refused.map(r => r.id + ": " + r.why).join("; ")})` : "."));
+    } catch (e) { alert(e.message); }
+    picking = false; picked.clear(); load(true);
+  };
+  box.classList.toggle("hide", !arch.length);
+  box.querySelector("summary").textContent = `Archived (${arch.length})`;
+  $("archList").innerHTML = arch.map(x => `<div class="srow arow"><span class="sname"><span class="tx">${esc(x.label || shortName(x))}</span></span>
+      <span class="n ${sign((x.session || {}).total || 0)}">${x.session ? amt(Math.abs(x.session.total)) : "–"}</span>
+      <span class="n"><button type="button" class="lnk" data-restore="${esc(x.id)}">Restore</button></span></div>`).join("");
+  box.querySelectorAll("[data-restore]").forEach(b => b.onclick = async () => {
+    try { await post("/api/paper/archive", {ids: [b.dataset.restore], archive: false}); flash("Restored."); } catch (e) { alert(e.message); }
+    load(true);
+  });
+  return can;
+}
+
 function renderSummary() {
   const it = items();
+  if (picking) {
+    const can = renderArchive(), byId = Object.fromEntries((last.sessions || []).map(x => [x.id, x]));
+    $("summary").innerHTML = it.map(i => { const ok = can(byId[i.id]); return `<label class="srow pick${ok ? "" : " off"}" title="${ok ? "" : "Running, or a LIVE session with open legs: not archived"}">
+        <span class="sname"><input type="checkbox" data-pick="${esc(i.id)}" ${picked.has(i.id) ? "checked" : ""} ${ok ? "" : "disabled"}><span class="tx">${esc(i.chip)} <small class="muted">${esc(i.stateText)}</small></span></span>
+        <span class="n"></span><span class="n"></span><span class="n t ${sign(i.total || 0)}">${i.total == null ? "–" : amt(Math.abs(i.total))}</span></label>`; }).join("");
+    $("summary").querySelectorAll("[data-pick]").forEach(c => c.onchange = () => { c.checked ? picked.add(c.dataset.pick) : picked.delete(c.dataset.pick); renderArchive(); });
+    return;
+  }
   if (!it.find(i => i.id === selected)) selected = it.length ? it[0].id : "";
   $("summary").innerHTML = it.length
     ? `<div class="srow hd"><span></span><span class="n">Unrealized</span><span class="n">Today</span><span class="n">Total ₹</span></div>` + it.map(i =>
@@ -6276,7 +6393,7 @@ function render() {
   // back where it was, so reading the bottom of a long page (iPhone Safari especially) never jumps up.
   const y = window.scrollY, held = ["detail", "payGrid", "calAll", "chips"].map(id => $(id)).filter(Boolean);
   held.forEach(el => { el.style.minHeight = el.offsetHeight + "px"; });
-  if (OVERVIEW) { renderSummary(); renderPayoffs(); renderCalAll(); }
+  if (OVERVIEW) { renderSummary(); renderArchive(); renderPayoffs(); renderCalAll(); }
   else { renderChips(); renderDetail(); }
   if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -6374,7 +6491,7 @@ async function ticks() {
         setTk(card, "age", "· " + new Date(s.time).toLocaleTimeString("en-IN", {hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false}));
       }
     }
-    if (OVERVIEW) renderSummary(); else renderChips();
+    if (OVERVIEW) { renderSummary(); renderArchive(); } else renderChips();
     if (reload) load(true);              // a leg opened or closed: the full view
   } catch (e) { /* the 3-second refresh reports problems */ } finally { tickBusy = false; }
 }

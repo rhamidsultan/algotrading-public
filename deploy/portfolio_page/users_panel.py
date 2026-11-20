@@ -95,7 +95,8 @@ USE = {    # other methods (POST, DELETE): exact paths, regexes
                    re.compile(r"/api/compare-period/[0-9a-z-]+/delete"))),
 }
 PAPER_ACTIONS = {"/api/paper/start", "/api/paper/stop", "/api/paper/kill", "/api/paper/reset", "/api/paper/delete",
-                 "/api/paper/sync", "/api/paper/exit_price"}   # sync, exit price: LIVE sessions only, so the owner
+                 "/api/paper/sync", "/api/paper/exit_price", "/api/paper/recheck", "/api/paper/archive"}
+# sync, exit price: LIVE sessions only, so the owner; recheck, archive: like the session's mode
 PW_PATHS = {"/account/password", "/api/account/password", "/api/account", "/signout"}
 HIDE_JSON = {"/api/data", "/api/live", "/api/history", "/api/stock", "/api/gold", "/api/us"}
 HIDE_PAGES = {"/", "/stock", "/gold", "/us"}
@@ -279,6 +280,9 @@ def attach(P) -> None:
     def mode_of(path, body):
         if path == "/api/paper/start":
             return body.get("mode") or "paper"
+        if isinstance(body.get("ids"), list):            # several sessions (archive): LIVE if any is LIVE
+            xs = [P._slot(str(i)) for i in body["ids"]]
+            return "live" if any(x and P._mode(x) == "live" for x in xs) else "paper"
         x = P._slot(str(body.get("id", "")))
         return P._mode(x) if x else "paper"
 

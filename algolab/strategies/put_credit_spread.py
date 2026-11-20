@@ -53,6 +53,12 @@ class PutCreditSpread(Strategy):
         self.count = 0
         self.regime = RegimeFilter()
 
+    def recheck_today(self, today: str) -> str | None:
+        if self.skipped.startswith(today):
+            why, self.skipped = self.skipped.split("|", 1)[-1], ""
+            return why
+        return None
+
     def get_state(self) -> dict:
         return {"cycle": self.cycle, "done": self.done[-20:], "last_exit": self.last_exit, "skipped": self.skipped,
                 "count": self.count, "regime": self.regime.get_state()}

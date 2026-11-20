@@ -54,6 +54,11 @@ class Strategy:
         The other legs are kept. The default needs nothing: ctx.close() only closes what is held. A strategy that
         re-enters or rolls a leg overrides this so the leg Hamid closed is not traded again in that trade."""
 
+    def recheck_today(self, today: str) -> str | None:
+        """Forget today's "no trade today" decision so the entry filters are checked again at the next bar (Re-check
+        on the card). Returns what was cleared, or None if there was nothing to clear. The default: nothing."""
+        return None
+
     def get_state(self) -> dict:
         return {}
 

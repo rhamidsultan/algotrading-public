@@ -4,6 +4,15 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Re-check today and the session archive (20 Nov 2026, pull request "recheck-and-archive")
+
+- **Re-check today** (a running session's card, when its strategy said "No trade today" / "No entry today" and
+  nothing is open): the strategy forgets today's decision (`Strategy.recheck_today`, RECHECK file) and its entry
+  filters run again at the next bar, within its entry window (intraday_strangle until `last_entry_time`).
+- **Archive** (Live › Overview and Paper › Overview): Select, tick sessions, Move to archive. Running sessions and a
+  LIVE one still holding legs are refused. Archived ones leave the lists, the chips and the totals, and are listed
+  under "Archived (n)" with Restore; starting or resuming one brings it back. Marker file `archived` in its folder.
+
 ## Gap and VIX-spike filters use the exchange's previous close (20 Nov 2026, pull request "gap-prev-close")
 
 - Why: 20 Nov, "No trade today: NIFTY +1.34% from yesterday's close (trend/gap day)" was wrong. The filter took the
