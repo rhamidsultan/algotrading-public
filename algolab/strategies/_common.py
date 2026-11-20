@@ -10,7 +10,7 @@ an underscore are not listed in the dashboard).
 from __future__ import annotations
 
 import math
-from datetime import date
+from datetime import date, timedelta
 
 from ..events import events_between
 from ..strategy import Param
@@ -28,6 +28,13 @@ def filter_params(vix_min=11.0, vix_max=24.0, vix_spike=12.0, gap=0.8, ivrv=1.0,
         "events": Param(events, "Scheduled events (RBI policy, Budget...) before expiry",
                         choices=["skip", "ignore"]),
     }
+
+
+def _last_weekday_before(d: date) -> date:
+    d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
 
 
 class RegimeFilter:
@@ -56,6 +63,13 @@ class RegimeFilter:
             self.days.append(self.today)
             self.days = self.days[-40:]
             self.today = None
+        real = getattr(ctx, "prev_close", None)
+        if real and self.days and self.days[-1][0] == _last_weekday_before(ctx.now.date()).isoformat():
+            # the last day this session saw may have ended early (stopped, restarted): the exchange's close wins
+            self.days[-1][1] = float(real)
+            pv = getattr(ctx, "prev_vix_close", None)
+            if pv:
+                self.days[-1][2] = float(pv)
         if self.today is None:
             self.today = [d, ctx.spot, vix]
         else:
@@ -86,14 +100,14 @@ class RegimeFilter:
                 return f"VIX {vix:.1f} below {p.vix_min:g} (thin premium)"
             if p.vix_max > 0 and vix > p.vix_max:
                 return f"VIX {vix:.1f} above {p.vix_max:g}"
-            prev_vix = self.days[-1][2] if self.days else None
+            prev_vix = getattr(ctx, "prev_vix_close", None) or (self.days[-1][2] if self.days else None)
             if p.vix_spike_pct > 0:
                 if prev_vix:
                     if (vix / prev_vix - 1) * 100 > p.vix_spike_pct:
                         return f"VIX up {(vix / prev_vix - 1) * 100:.0f}% on the day"
                 else:
                     missing.append("VIX spike")
-        prev = self.prev_close()
+        prev = getattr(ctx, "prev_close", None) or self.prev_close()   # live: the exchange's previous close
         if p.gap_pct > 0:
             if prev:
                 move = (ctx.spot / prev - 1) * 100

@@ -404,6 +404,24 @@ class KiteFeed(Feed):
                 self.log(f"1-second recording off: {e}")
                 self.sec1 = None
 
+    def _take_prev_close(self, idx: dict | None, vix: dict | None) -> None:
+        """Zerodha's quote carries the previous day's close in ohlc.close (for the index and VIX)."""
+        c = float(((idx or {}).get("ohlc") or {}).get("close") or 0)
+        v = float(((vix or {}).get("ohlc") or {}).get("close") or 0)
+        if c > 0:
+            self.prev_close = c
+        if v > 0:
+            self.prev_vix_close = v
+
+    def _load_previous_close(self) -> None:
+        """Once a day (also in stream mode, where the index comes from ticks): the previous close of NIFTY and VIX."""
+        try:
+            q = self._rest([SPOT_SYMBOL, VIX_SYMBOL])
+            self.prev_close = self.prev_vix_close = None
+            self._take_prev_close(q.get(SPOT_SYMBOL), q.get(VIX_SYMBOL))
+        except Exception as e:  # noqa: BLE001 - the strategy then uses its own daily record
+            self.log(f"Previous close not read: {e}")
+
     def _load_chain(self) -> None:
         chain = option_chain(self.kite, self.underlying)
         self._symbols = {(r.expiry, int(r.strike), r.right): r.tradingsymbol for r in chain.itertuples()}
@@ -412,6 +430,7 @@ class KiteFeed(Feed):
         self._expiries = sorted(set(chain.expiry))
         self.lot_size = int(chain.lot_size.mode().iloc[0])
         self._chain_day = ist_now().date()
+        self._load_previous_close()
 
     def _refresh_login(self) -> None:
         """Zerodha logins expire every morning; adopt the new one as soon as it is saved."""
@@ -660,6 +679,7 @@ class KiteFeed(Feed):
                 continue
             self.now, self.spot = now, float(idx["last_price"])
             self.vix = (q.get(VIX_SYMBOL) or {}).get("last_price")
+            self._take_prev_close(idx, q.get(VIX_SYMBOL))
             self._cache = {}
             for c, sym in watched.items():
                 quote = self._parse(c, q.get(f"NFO:{sym}")) if sym else None

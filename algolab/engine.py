@@ -35,6 +35,15 @@ class Context:
         return self.feed.vix
 
     @property
+    def prev_close(self):
+        """NIFTY's previous close from the exchange, when the feed has it (live), else None."""
+        return getattr(self.feed, "prev_close", None)
+
+    @property
+    def prev_vix_close(self):
+        return getattr(self.feed, "prev_vix_close", None)
+
+    @property
     def lot_size(self) -> int:
         """Lot size of contracts expiring today or later (see lot_size_for for a given expiry)."""
         return self.feed.lot_size_for(self.now.date())
