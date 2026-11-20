@@ -336,6 +336,7 @@ class Session:
                 raise Halt("Stopped from the dashboard")
             if self._pending_halt:                       # found between updates (Sync): squared off now
                 raise Halt(self._pending_halt)
+            self._recheck_requested(now)                 # Re-check on the card: today's skip forgotten
             if self.mode == "live":
                 try:      # cannot check Zerodha (positions, stops) just now: nothing is sent this moment
                     self._edits_requested(now)           # exit prices edited on the card
@@ -444,6 +445,20 @@ class Session:
         f.unlink(missing_ok=True)
         self._log("Synced with Zerodha: " + ("; ".join(done) if done else "nothing booked"))
         self._tell_strategy()
+        self._save_now(now)
+        return True
+
+    def _recheck_requested(self, now) -> bool:
+        """Re-check on the card (RECHECK): the strategy forgets today's "no trade today" decision, so its entry
+        filters run again at the next bar (within its entry window)."""
+        f = self.slot.dir / "RECHECK"
+        if not f.exists():
+            return False
+        f.unlink(missing_ok=True)
+        fn = getattr(self.strategy, "recheck_today", None)
+        why = fn(now.date().isoformat()) if fn else None
+        self._log(f"Re-check: today's skip ({why}) cleared; the entry filters run again now" if why
+                  else "Re-check: nothing to clear today")
         self._save_now(now)
         return True
 

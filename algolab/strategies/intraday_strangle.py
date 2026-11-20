@@ -129,6 +129,13 @@ class IntradayStrangle(Strategy):
                 leg.update(open=True, sold=f.price, stop=f.price * (1 + p.leg_stop_pct / 100),
                            reentries=leg["reentries"] + 1)
 
+    def recheck_today(self, today: str) -> str | None:
+        d = self.day
+        if d and d.get("date") == today and d.get("skip"):
+            why, self.day = d["skip"], None          # checked again at the next bar, before last_entry_time
+            return why
+        return None
+
     def _start_day(self, ctx, today: str) -> None:
         p = self.p
         why = self.regime.check(ctx, p, until=ctx.now.date())
