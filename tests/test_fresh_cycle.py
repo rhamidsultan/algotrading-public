@@ -89,3 +89,14 @@ def test_a_day_the_strategy_closed_itself_stays_closed():
     assert st.fresh_cycle("2026-11-23") is None and st.day["closed"]
     st.day = {"date": "2026-11-23", "group": "002", "legs": {"CE": {"open": True}}}
     assert "002" in st.fresh_cycle("2026-11-23") and st.day is None
+
+
+def test_stop_tells_the_strategy_its_legs_are_closed(tmp_path, monkeypatch):
+    fake, cfg, sid, want = _env(tmp_path, monkeypatch)
+    paper.run_group(cfg, want, "kite", max_bars=3)
+    paper.kill(sid)
+    paper.run_group(cfg, want, "kite", max_bars=3)
+    s = paper.read_state(sid)
+    legs = s["strategy_state"]["day"]["legs"]
+    assert all(not leg["open"] and leg.get("stopped") for leg in legs.values()), legs
+    assert any("closed by the session's stop" in x for x in s["logs"])

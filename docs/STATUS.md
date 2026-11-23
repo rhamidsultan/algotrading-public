@@ -12,6 +12,9 @@ Newest information first within each section.
   fresh cycle (`Strategy.fresh_cycle`, once per press: a restart after an update is not a resume).
   intraday_strangle forgets today's cycle and starts a new one at the next bar, before `last_entry_time`, with the
   entry checks; a day it closed itself (day loss / target / 15:15) stays closed. Other strategies: unchanged.
+- Stop (and any halt or its close retries) now also tells the strategy which legs it squared off
+  (`Strategy.on_squared_off`, by default as a leg closed in Kite): intraday_strangle marks them "(closed by Stop)",
+  no re-entry, so its record never shows a closed leg as open.
 
 ## Re-check today and the session archive (20 Nov 2026, pull request "recheck-and-archive")
 
