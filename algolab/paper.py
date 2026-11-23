@@ -269,11 +269,18 @@ class Session:
             self.logs[:0] = saved.get("logs", [])
             self.day = saved.get("day") or {}
             self.saved = saved
+            resumed = want.get("resumed")         # Resume on the card (not a restart): once per press
+            if resumed and resumed != saved.get("resume_seen") and not self.broker.positions:
+                fn = getattr(self.strategy, "fresh_cycle", None)
+                said = fn(ist_now().date().isoformat()) if fn else None
+                if said:
+                    self.logs.append(f"{ist_now():%Y-%m-%d %H:%M}  Resumed with nothing open: {said}")
         else:
             if saved:   # a different feed or mode: start a new account
                 reset(self.slot.id)
             self.day = {}
             self.saved = None
+        self.resume_seen = want.get("resumed") or (self.saved or {}).get("resume_seen")
         if not self.slot.equity.exists():
             self.slot.equity.write_text("time,equity,spot\n")
         self._minute = None
@@ -698,7 +705,7 @@ class Session:
             "time": ctx.now.isoformat(), "spot": ctx.spot, "vix": ctx.vix, "lot_size": ctx.lot_size,
             "equity": point[1], "net_realized": b.net_realized, "unrealized": ctx.unrealized,
             "positions": positions,
-            "broker": b.to_dict(), "strategy_state": self.strategy.get_state(),
+            "broker": b.to_dict(), "strategy_state": self.strategy.get_state(), "resume_seen": self.resume_seen,
             "preset": self.want.get("preset"), "risk": self.risk_settings, "risk_state": self.risk.get_state() if self.risk is not None else None, "logs": self.logs[-300:],
         })
         self.bars += 1

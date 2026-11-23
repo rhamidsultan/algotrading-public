@@ -129,6 +129,13 @@ class IntradayStrangle(Strategy):
                 leg.update(open=True, sold=f.price, stop=f.price * (1 + p.leg_stop_pct / 100),
                            reentries=leg["reentries"] + 1)
 
+    def fresh_cycle(self, today: str) -> str | None:
+        d = self.day
+        if d and d.get("date") == today and not d.get("closed"):   # closed: its day loss / target / square-off stands
+            was, self.day = d.get("group") or d.get("skip") or "", None
+            return f"today's cycle ({was}) set aside: a new one starts at the next bar (before {self.p.last_entry_time})"
+        return None
+
     def recheck_today(self, today: str) -> str | None:
         d = self.day
         if d and d.get("date") == today and d.get("skip"):
