@@ -241,6 +241,8 @@ def test_remove_gtt(tmp_path, monkeypatch):
     mod, c = _load(tmp_path, monkeypatch, k)
     c.post("/api/positions/protect", json={"key": f"NFO:{SYM_L}:NRML", "sl": 36, "target": 60})
     r = c.post("/api/positions/protect", json={"key": f"NFO:{SYM_L}:NRML", "sl": None, "target": None})
+    assert r.status_code == 400 and k.gtts                                 # both empty is not a removal by itself
+    r = c.post("/api/positions/protect", json={"key": f"NFO:{SYM_L}:NRML", "sl": None, "target": None, "remove": True})
     assert r.status_code == 200 and k.calls[-1] == ("delete_gtt", 1) and not k.gtts
 
 

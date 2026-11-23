@@ -109,3 +109,35 @@ def test_trail_level():
     spec.loader.exec_module(m)
     assert m.trail_level(-65, 50.0, 10, "pct") == 55.0 and m.trail_level(65, 50.0, 10, "pct") == 45.0
     assert m.trail_level(-65, 50.02, 10, "pct") == 55.05            # a short's SL rounds up (never tighter by rounding)
+
+
+def test_a_trail_ends_when_the_position_is_opened_again_or_its_gtt_is_replaced(tmp_path, monkeypatch):
+    k, mod, c = _env(tmp_path, monkeypatch)
+    c.post("/api/positions/protect", json={"key": KEY_S, "sl": 70})
+    c.post("/api/positions/trail", json={"key": KEY_S, "by": 10})
+    k.pos[SYM_S] = (-65, "NRML", 52.0)                            # closed and sold again, same size
+    _fresh(mod)
+    assert "opened again" in mod.trail_once(k)[0] and not mod._trails_rw()
+
+
+def test_a_stale_or_one_sided_price_does_not_move_the_stop(tmp_path, monkeypatch):
+    k, mod, c = _env(tmp_path, monkeypatch)
+    c.post("/api/positions/protect", json={"key": KEY_S, "sl": 70})
+    c.post("/api/positions/trail", json={"key": KEY_S, "by": 10})
+    real = k.quote
+    k.quote = lambda keys: {kk: {**v, "depth": {"buy": [], "sell": v["depth"]["sell"]}} for kk, v in real(keys).items()}
+    _fresh(mod)
+    mod.trail_once(k)
+    assert not [x for x in k.calls if x[0] == "modify_gtt"]      # no bid: not moved
+    k.quote = lambda keys: {kk: {**v, "last_trade_time": "2026-10-29 10:40:00"} for kk, v in real(keys).items()}
+    _fresh(mod)
+    mod.trail_once(k)
+    assert not [x for x in k.calls if x[0] == "modify_gtt"]      # last trade 20 min old: not moved
+
+
+def test_the_page_never_converts_prices_as_percent_and_never_removes_on_save(tmp_path, monkeypatch):
+    k, mod, c = _env(tmp_path, monkeypatch)
+    page = c.get("/positions").get_data(as_text=True)
+    assert 'el.dataset.unit="px";setUnit(el,"px")' in page        # opening the editor: prices, as they are
+    assert "away(r,kind)*(px/r.avg-1)*100" in page                 # signed %: an SL past the average stays there
+    assert "remove:true" in page and "To delete the stop, tap Remove GTT" in page

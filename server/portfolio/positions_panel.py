@@ -79,6 +79,7 @@ OPEN_STATUSES = {"OPEN", "TRIGGER PENDING", "AMO REQ RECEIVED", "MODIFY PENDING"
                  "PUT ORDER REQ RECEIVED", "MODIFY VALIDATION PENDING", "CANCEL PENDING", "MODIFY ORDER REQ RECEIVED",
                  "TRIGGER PENDING MODIFY"}
 TRAIL_EVERY = 15                # seconds between trail checks (market hours)
+TRAIL_STALE = 120               # a quote whose last trade is older than this does not move a trailing SL
 TAG = "positionsclose"          # Kite tag: alphanumeric, at most 20 characters
 KEY_OK = re.compile(r"^(NFO|BFO|NSE|BSE|MCX|CDS):[A-Z0-9&_.-]{1,40}:[A-Z]{2,5}$")
 
@@ -513,6 +514,12 @@ def snapshot(k, force_slow=False):
             "busy": BUSY.get(key), "trail": trails.get(key),
         })
     rows.sort(key=lambda r: (r["exchange"], r["symbol"], r["product"] or ""))
+    gone = [key for key in trails if key not in {r["key"] for r in rows}]
+    if gone and net:                                   # a trail never outlives its position (seen flat here)
+        try:
+            _trails_rw(lambda cur: [cur.pop(key, None) for key in gone])
+        except OSError:
+            pass
     total = round(sum(r["pnl"] for r in rows) + sum(c["pnl"] for c in closed), 2)
     return {"as_of": _now().strftime("%H:%M:%S"), "positions": rows, "closed": closed,
             "open_pnl": round(sum(r["pnl"] for r in rows), 2), "day_pnl": total,
@@ -539,7 +546,6 @@ def _err(msg, code=400):
 # ---- routes -----------------------------------------------------------------------------------------
 @panel.route("/api/positions")
 def api_positions():
-    _start_trailer()
     k, why = _kite()
     if k is None:
         return jsonify(login=False, error=why, jobs=_jobs_view())
@@ -605,6 +611,8 @@ def api_protect():
                 return _err(f"This position has {len(found)} GTTs at Zerodha. Delete the extra ones in Kite first.")
             g = found[0] if found else None
             if sl is None and target is None:
+                if d.get("remove") is not True:
+                    return _err("Enter an SL, a target or both (Remove GTT deletes the stop).")
                 if not g:
                     return _err("There is no GTT to remove.")
                 k.delete_gtt(g["id"])
@@ -1113,77 +1121,110 @@ def _closing_anywhere(key):
     return any(j.get("key") == key and j.get("status") == "working" for j in jobs or [])
 
 
+def _fresh_mid(k, exch, sym):
+    """A fresh price for a trail move: one quote now (not the page's cache), the bid/ask midpoint (one off-market
+    print does not move the stop), its last trade within TRAIL_STALE s when Zerodha gives the time. None if not."""
+    q = _quote(k, [f"{exch}:{sym}"], tries=2).get(f"{exch}:{sym}") or {}
+    depth = q.get("depth") or {}
+    bid = next((float(x["price"]) for x in depth.get("buy") or [] if x.get("price")), 0.0)
+    ask = next((float(x["price"]) for x in depth.get("sell") or [] if x.get("price")), 0.0)
+    ltp = float(q.get("last_price") or 0)
+    if not (bid > 0 and ask >= bid and ltp > 0):
+        return None, None, q
+    when = q.get("last_trade_time") or q.get("timestamp")
+    if when:
+        try:
+            t = when if isinstance(when, datetime) else datetime.fromisoformat(str(when))
+            t = t if t.tzinfo else t.replace(tzinfo=IST)
+            if (_now() - t).total_seconds() > TRAIL_STALE:
+                return None, None, q
+        except ValueError:
+            pass
+    return round((bid + ask) / 2, 2), ltp, q
+
+
 def trail_once(k, now=None):
     """One pass: move each trailed GTT SL that its best price allows. Returns lines for the log."""
-    out = []
-    trails = _trails_rw()
-    for key, t in list(trails.items()):
-        def drop(why, tell=True):
+    out, tell = [], []
+    for key in list(_trails_rw()):
+        def drop(why, alert=True):
             _trails_rw(lambda cur: cur.pop(key, None))
             _log_action(action="trail_end", key=key, why=why)
-            if tell:
-                _notify("Trailing SL ended", f"{pretty(_split(key)[1])}: {why}")
+            if alert:
+                tell.append(("Trailing SL ended", f"{pretty(_split(key)[1])}: {why}"))
             out.append(f"{key}: trail ended ({why})")
-        with _keylock(key):
-            if _closing_anywhere(key):
-                continue
-            net, quotes, gtts, _orders = _fetch(k, force_slow=True)
-            p = _find(net, key)
-            qty = int((p or {}).get("quantity") or 0)
-            exch, sym, product = _split(key)
-            if not qty or qty != int(t.get("qty") or 0):
-                drop("the position closed or changed size", tell=bool(qty))
-                continue
-            why = _locked_reason(key, qty)
-            if why:
-                drop(why)
-                continue
-            found = _gtts_for(gtts, exch, sym, _exit_side(qty), product)
-            if len(found) != 1:
-                drop("its GTT is gone (triggered or removed)" if not found else "it has more than one GTT")
-                continue
-            g = _gtt_view(found[0], qty)
-            if not g["sl"] or not g["qty_ok"]:
-                drop("its GTT has no SL for the whole position")
-                continue
-            q = quotes.get(f"{exch}:{sym}") or {}
-            ltp = float(q.get("last_price") or 0)
-            if ltp <= 0:
-                continue
-            best = min(float(t["best"]), ltp) if qty < 0 else max(float(t["best"]), ltp)
-            new = trail_level(qty, best, float(t["by"]), t.get("unit", "pct"))
-            better = new < g["sl"] - TICK / 2 if qty < 0 else new > g["sl"] + TICK / 2
-            if better:
-                try:
-                    ttype, trig, gorders, info = build_gtt(qty, product, ltp, new, g["target"], q)
-                    k.modify_gtt(trigger_id=g["id"], trigger_type=ttype, tradingsymbol=sym, exchange=exch,
-                                 trigger_values=trig, last_price=ltp, orders=gorders)
-                    _log_action(action="gtt_trail", key=key, gtt=g["id"], sl_from=g["sl"], sl_to=new, best=best, ltp=ltp)
-                    out.append(f"{key}: SL {g['sl']:.2f} -> {new:.2f} (best {best:.2f})")
-                except ValueError as e:
-                    out.append(f"{key}: not moved ({e})")
-                except Exception as e:  # noqa: BLE001 - tried again at the next pass
-                    out.append(f"{key}: Zerodha refused the move ({e})")
-                finally:
-                    _invalidate()
-            if best != float(t["best"]):
-                _trails_rw(lambda cur: cur.get(key) is not None and cur[key].update(best=best))
+        try:
+            with _keylock(key):
+                t = _trails_rw().get(key)              # read again under the lock: off / changed meanwhile
+                if not t or _closing_anywhere(key):
+                    continue
+                net, _quotes, gtts, _orders = _fetch(k, force_slow=True)
+                p = _find(net, key)
+                qty = int((p or {}).get("quantity") or 0)
+                exch, sym, product = _split(key)
+                if not qty or qty != int(t.get("qty") or 0):
+                    drop("the position closed or changed size", alert=bool(qty))
+                    continue
+                avg = float(p.get("average_price") or 0)
+                if t.get("avg") and abs(avg - float(t["avg"])) > 0.001:
+                    drop("the position was closed and opened again (its average price changed)")
+                    continue
+                why = _locked_reason(key, qty)
+                if why:
+                    drop(why)
+                    continue
+                found = _gtts_for(gtts, exch, sym, _exit_side(qty), product)
+                if len(found) != 1:
+                    drop("its GTT is gone (triggered or removed)" if not found else "it has more than one GTT")
+                    continue
+                g = _gtt_view(found[0], qty)
+                if not g["sl"] or not g["qty_ok"] or (t.get("gtt") and str(g["id"]) != str(t["gtt"])):
+                    drop("its GTT changed (no SL for the whole position, or a new GTT)")
+                    continue
+                mid, ltp, q = _fresh_mid(k, exch, sym)
+                if mid is None:
+                    continue                           # no fresh two-sided price: tried again next pass
+                best = min(float(t["best"]), mid) if qty < 0 else max(float(t["best"]), mid)
+                new = trail_level(qty, best, float(t["by"]), t.get("unit", "pct"))
+                better = new < g["sl"] - TICK / 2 if qty < 0 else new > g["sl"] + TICK / 2
+                if better:
+                    try:
+                        ttype, trig, gorders, info = build_gtt(qty, product, ltp, new, g["target"], q)
+                        k.modify_gtt(trigger_id=g["id"], trigger_type=ttype, tradingsymbol=sym, exchange=exch,
+                                     trigger_values=trig, last_price=ltp, orders=gorders)
+                        _log_action(action="gtt_trail", key=key, gtt=g["id"], sl_from=g["sl"], sl_to=new, best=best, ltp=ltp)
+                        out.append(f"{key}: SL {g['sl']:.2f} -> {new:.2f} (best {best:.2f})")
+                    except ValueError as e:
+                        out.append(f"{key}: not moved ({e})")
+                    except Exception as e:  # noqa: BLE001 - tried again at the next pass
+                        out.append(f"{key}: Zerodha refused the move ({e})")
+                    finally:
+                        _invalidate()
+                if best != float(t["best"]):
+                    _trails_rw(lambda cur: cur.get(key) is not None and cur[key].update(best=best))
+        except Exception as e:  # noqa: BLE001 - one bad record must not stop the other trails
+            out.append(f"{key}: trail check failed ({type(e).__name__}: {e})")
+    for subj, body in tell:                            # after the locks: a slow alert never holds up a Close
+        _notify(subj, body)
     return out
 
 
 def _market_open(now):
     return now.weekday() < 5 and (now.replace(hour=9, minute=15, second=0, microsecond=0) <= now
-                                  <= now.replace(hour=15, minute=30, second=0, microsecond=0))
+                                  <= now.replace(hour=15, minute=40, second=0, microsecond=0))   # F&O until 15:40
 
 
 def _trail_loop():
-    try:
-        fh = open(_data_dir() / "positions_trailer.lock", "w")
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)        # one dashboard process moves the stops
-    except OSError:
-        return
+    fh = None
     while True:
         _sleep(TRAIL_EVERY)
+        if fh is None:                                        # one dashboard process moves the stops; another one
+            try:                                              # (an update's overlap) takes over when it goes
+                f = open(_data_dir() / "positions_trailer.lock", "w")
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fh = f
+            except OSError:
+                continue
         try:
             if not _market_open(_now()) or not _trails_rw():
                 continue
@@ -1234,7 +1275,8 @@ def api_trail():
         ltp = float((quotes.get(f"{exch}:{sym}") or {}).get("last_price") or p.get("last_price") or 0)
         if ltp <= 0:
             return _err("No last price for this contract right now.")
-        rec = {"by": by, "unit": unit, "qty": qty, "best": ltp, "set_at": _now().isoformat(timespec="seconds")}
+        rec = {"by": by, "unit": unit, "qty": qty, "best": ltp, "avg": float(p.get("average_price") or 0),
+               "gtt": g["id"], "set_at": _now().isoformat(timespec="seconds")}
         _trails_rw(lambda cur: cur.__setitem__(key, rec))
         _log_action(action="trail_on", key=key, **rec)
     lvl = trail_level(qty, ltp, by, unit)
@@ -1246,12 +1288,15 @@ _TRAILER = []
 
 
 def _start_trailer():
-    """Started with the page's first request (not at import: tests and tools import this module)."""
+    """Started when the dashboard registers this page (after a restart too, before anyone opens it)."""
     with _LOCK:
-        if _TRAILER or os.environ.get("POSITIONS_TRAIL", "1") == "0":
+        if _TRAILER or os.environ.get("POSITIONS_TRAIL", "1") == "0" or "pytest" in sys.modules:
             return
         _TRAILER.append(threading.Thread(target=_trail_loop, daemon=True))
     _TRAILER[0].start()
+
+
+panel.record_once(lambda _state: _start_trailer())
 
 
 @panel.route("/positions")
@@ -1372,8 +1417,9 @@ function card(r){
  <div class="cf" hidden><div class="cfText"></div><div class="acts"><button class="bBack ghost">Back</button><button class="bGo danger">Close now</button></div></div>`;
  const q=s=>el.querySelector(s);
  q(".bEdit").onclick=()=>{const r=cur(el);const ed=q(".ed");if(!ed.hidden){ed.hidden=true;return}
+  el.dataset.unit="px";setUnit(el,"px");      // prices first, never converted from the last edit's unit
   q(".iSl").value=r.gtt&&r.gtt.sl?r.gtt.sl.toFixed(2):"";q(".iTg").value=r.gtt&&r.gtt.target?r.gtt.target.toFixed(2):"";
-  setUnit(el,"px");q(".bRemove").hidden=!r.gtt;q(".eMsg").innerHTML="";chips(el,r);hint(el);
+  q(".bRemove").hidden=!r.gtt;q(".eMsg").innerHTML="";chips(el,r);hint(el);
   q(".iTr").value=r.trail?r.trail.by:"";q(".iTrU").value=r.trail?r.trail.unit:"pct";q(".bTrailOff").hidden=!r.trail;tHint(el);
   q(".cf").hidden=true;ed.hidden=false;q(".iSl").focus()};
  q(".uPx").onclick=()=>setUnit(el,"px");q(".uPct").onclick=()=>setUnit(el,"pct");
@@ -1408,11 +1454,14 @@ function setUnit(el,u){const q=s=>el.querySelector(s),r=cur(el),was=el.dataset.u
   for(const [cls,kind] of [[".iSl","sl"],[".iTg","tg"]]){const v=parseFloat(q(cls).value);if(v>0)q(cls).value=u==="pct"?pctOf(r,kind,v).toFixed(1):priceOf(r,kind,v)}}
  el.dataset.unit=u;q(".uPx").classList.toggle("on",u==="px");q(".uPct").classList.toggle("on",u==="pct");
  q(".lSl").textContent=u==="pct"?"Stop-loss, % from avg":"Stop-loss trigger";q(".lTg").textContent=u==="pct"?"Target, % from avg":"Target trigger";
- q(".iSl").step=q(".iTg").step=u==="pct"?"1":"0.05";chips(el,r);hint(el)}
+ q(".iSl").step=q(".iTg").step=u==="pct"?"1":"0.05";q(".iSl").min=q(".iTg").min=u==="pct"?"":"0";chips(el,r);hint(el)}
 const away=(r,kind)=>(r.side==="short")===(kind==="sl")?1:-1;     // +1: above the average price
 const priceOf=(r,kind,pct)=>tick(r.avg*(1+away(r,kind)*pct/100),away(r,kind)>0);
-const pctOf=(r,kind,px)=>Math.abs(px/r.avg-1)*100;
-function val(el,cls,kind){const v=parseFloat(el.querySelector(cls).value);if(!(v>0))return NaN;return el.dataset.unit==="pct"?parseFloat(priceOf(cur(el),kind,v)):v}
+// signed: + is the usual side (a short's SL above the average), - the other side (an SL trailed past the average)
+const pctOf=(r,kind,px)=>away(r,kind)*(px/r.avg-1)*100;
+// the price a field asks for: NaN if empty, 0 if it is not a usable price (refused on Save)
+function val(el,cls,kind){const raw=el.querySelector(cls).value.trim();if(raw==="")return NaN;const v=parseFloat(raw);if(!isFinite(v))return 0;
+ if(el.dataset.unit!=="pct")return v>0?v:0;const r=cur(el);if(!(r.avg>0))return 0;const p=parseFloat(priceOf(r,kind,v));return p>0?p:0}
 function tHint(el){const r=cur(el),q=s=>el.querySelector(s),by=parseFloat(q(".iTr").value),u=q(".iTrU").value;
  if(!(by>0)){q(".tHint").innerHTML=r.trail?`Trailing ${r.trail.by}${r.trail.unit==="pct"?"%":" pts"} behind the best price (${px(r.trail.best)}).`:"";return}
  const short=r.side==="short",gap=u==="pct"?r.ltp*by/100:by,lvl=short?r.ltp+gap:r.ltp-gap;
@@ -1429,12 +1478,16 @@ function hint(el){const r=cur(el),q=s=>el.querySelector(s);const sl=val(el,".iSl
   out.push(`SL: ${side} ${n} at limit ${tick(lim,short)} if LTP ${short?"rises to":"falls to"} ${sl.toFixed(2)}. Loss from avg about ₹${inr(Math.max(loss,0))}, more if it doesn't fill.`);
   if(short&&r.upper_circuit&&sl>=r.upper_circuit)out.push(`<span class="down">Above the upper circuit ₹${px(r.upper_circuit)}: Zerodha can't fill it.</span>`)}
  if(tg>0){const gain=short?(r.avg-tg)*n:(tg-r.avg)*n;out.push(`Target: ${side} ${n} if LTP ${short?"falls to":"rises to"} ${tg.toFixed(2)}. Gain from avg about ₹${inr(gain)}.`)}
- if(!(sl>0)&&!(tg>0))out.push(r.gtt?"Both empty: Save removes the GTT.":"Enter an SL, a target or both.");
+ if(sl===0||tg===0)out.push(`<span class="down">That is not a valid price.</span>`);
+ else if(!(sl>0)&&!(tg>0))out.push(r.gtt?"Both empty: tap Remove GTT to delete the stop.":"Enter an SL, a target or both.");
  q(".hint").innerHTML=out.join("<br>")}
 
-async function save(el,remove){const r=cur(el),q=s=>el.querySelector(s);const b=remove?q(".bRemove"):q(".bSave");b.disabled=true;
+async function save(el,remove){const r=cur(el),q=s=>el.querySelector(s);
  const sl=val(el,".iSl","sl"),tg=val(el,".iTg","tg");
- const body={key:r.key,sl:remove||!(sl>0)?null:sl,target:remove||!(tg>0)?null:tg};
+ if(!remove&&(sl===0||tg===0)){q(".eMsg").innerHTML=`<div class="msg err">That works out to no valid price. Check the value${el.dataset.unit==="pct"?" (a % that would put the price at 0 or below)":""}.</div>`;return}
+ if(!remove&&!(sl>0)&&!(tg>0)){q(".eMsg").innerHTML=`<div class="msg err">Enter an SL, a target or both. To delete the stop, tap Remove GTT.</div>`;return}
+ const b=remove?q(".bRemove"):q(".bSave");b.disabled=true;
+ const body=remove?{key:r.key,sl:null,target:null,remove:true}:{key:r.key,sl:sl>0?sl:null,target:tg>0?tg:null};
  try{const j=await api("/api/positions/protect",body);q(".eMsg").innerHTML=`<div class="msg ok">${esc(j.message)}</div>`;setTimeout(()=>{q(".ed").hidden=true},1800);load(true)}
  catch(e){q(".eMsg").innerHTML=`<div class="msg err">${esc(e.message)}</div>`}finally{b.disabled=false}}
 
