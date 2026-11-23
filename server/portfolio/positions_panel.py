@@ -518,6 +518,8 @@ def snapshot(k, force_slow=False):
     if gone and net:                                   # a trail never outlives its position (seen flat here)
         try:
             _trails_rw(lambda cur: [cur.pop(key, None) for key in gone])
+            for key in gone:
+                _log_action(action="trail_end", key=key, why="position no longer open (page)")
         except OSError:
             pass
     total = round(sum(r["pnl"] for r in rows) + sum(c["pnl"] for c in closed), 2)
@@ -1451,7 +1453,7 @@ function chips(el,r){
 
 // SL / target entered as a price or as % of the average price (a short's SL is above it, its target below)
 function setUnit(el,u){const q=s=>el.querySelector(s),r=cur(el),was=el.dataset.unit||"px";if(was!==u){
-  for(const [cls,kind] of [[".iSl","sl"],[".iTg","tg"]]){const v=parseFloat(q(cls).value);if(v>0)q(cls).value=u==="pct"?pctOf(r,kind,v).toFixed(1):priceOf(r,kind,v)}}
+  for(const [cls,kind] of [[".iSl","sl"],[".iTg","tg"]]){const v=parseFloat(q(cls).value);if(isFinite(v)&&(v>0||was==="pct"))q(cls).value=u==="pct"?pctOf(r,kind,v).toFixed(1):priceOf(r,kind,v)}}
  el.dataset.unit=u;q(".uPx").classList.toggle("on",u==="px");q(".uPct").classList.toggle("on",u==="pct");
  q(".lSl").textContent=u==="pct"?"Stop-loss, % from avg":"Stop-loss trigger";q(".lTg").textContent=u==="pct"?"Target, % from avg":"Target trigger";
  q(".iSl").step=q(".iTg").step=u==="pct"?"1":"0.05";q(".iSl").min=q(".iTg").min=u==="pct"?"":"0";chips(el,r);hint(el)}
