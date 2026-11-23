@@ -70,7 +70,7 @@ class IntradayStrangle(Strategy):
         out = {"pnl": ctx.net_realized - d["start_realized"] + ctx.unrealized,
                "levels": {f"{r} sold": leg["strike"] for r, leg in legs.items()},
                "note": "; ".join(f"{r} {leg['strike']} sold {leg['sold']:.2f}, stop {leg['stop']:.2f}"
-                                 f"{(' (closed in Kite)' if leg.get('manual') else ' (out)') if not leg['open'] else ''}"
+                                 f"{(' (closed in Kite)' if leg.get('manual') else ' (closed by Stop)' if leg.get('stopped') else ' (out)') if not leg['open'] else ''}"
                                  for r, leg in legs.items())}
         if self.p.day_stop > 0:
             out["stop"] = -self.p.day_stop
@@ -128,6 +128,23 @@ class IntradayStrangle(Strategy):
                 f = ctx.sell(c, p.lots, f"Re-entry {right}", d["group"])
                 leg.update(open=True, sold=f.price, stop=f.price * (1 + p.leg_stop_pct / 100),
                            reentries=leg["reentries"] + 1)
+
+    def on_squared_off(self, ctx, contract, qty, reason) -> None:
+        """Stop on the card (or a halt) closed a leg: out, no re-entry; a Resume starts a fresh cycle (fresh_cycle)."""
+        d = self.day
+        if not d or d.get("skip") or contract in ctx.positions:
+            return
+        leg = d.get("legs", {}).get(contract.right)
+        if leg is not None and leg.get("strike") == contract.strike and leg.get("open"):
+            leg.update(open=False, reentries=self.p.reentries, stopped=True)
+            ctx.log(f"{contract.right} closed by the session's stop: no re-entry for it in this cycle")
+
+    def fresh_cycle(self, today: str) -> str | None:
+        d = self.day
+        if d and d.get("date") == today and not d.get("closed"):   # closed: its day loss / target / square-off stands
+            was, self.day = d.get("group") or d.get("skip") or "", None
+            return f"today's cycle ({was}) set aside: a new one starts at the next bar (before {self.p.last_entry_time})"
+        return None
 
     def recheck_today(self, today: str) -> str | None:
         d = self.day

@@ -111,3 +111,4 @@ Dated, newest first. One line each; link the pull request when there is one.
 - 2026-11-18 — Shadow mode removed (Hamid): no Shadow when starting or deploying, the Live page shows LIVE only, existing shadow sessions are deleted; Paper stays.
 - 2026-11-19 — Protective stops: read the option's upper circuit limit first and keep the stop below it (Hamid).
 - 2026-11-20 — Re-check today button on a session whose strategy skipped the day; archive for old sessions, several at once (Hamid).
+- 2026-11-23 — A LIVE session stopped and resumed on the same day with nothing open starts a fresh cycle (Hamid).

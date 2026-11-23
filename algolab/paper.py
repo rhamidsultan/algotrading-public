@@ -269,11 +269,18 @@ class Session:
             self.logs[:0] = saved.get("logs", [])
             self.day = saved.get("day") or {}
             self.saved = saved
+            resumed = want.get("resumed")         # Resume on the card (not a restart): once per press
+            if resumed and resumed != saved.get("resume_seen") and not self.broker.positions:
+                fn = getattr(self.strategy, "fresh_cycle", None)
+                said = fn(ist_now().date().isoformat()) if fn else None
+                if said:
+                    self.logs.append(f"{ist_now():%Y-%m-%d %H:%M}  Resumed with nothing open: {said}")
         else:
             if saved:   # a different feed or mode: start a new account
                 reset(self.slot.id)
             self.day = {}
             self.saved = None
+        self.resume_seen = want.get("resumed") or (self.saved or {}).get("resume_seen")
         if not self.slot.equity.exists():
             self.slot.equity.write_text("time,equity,spot\n")
         self._minute = None
@@ -550,6 +557,7 @@ class Session:
                 return [f"orders not read: {e}"]
         if live and square_off:
             problems += settle()                             # first: a late opening fill is a leg to close too
+        held = {c: abs(p.qty) for c, p in self.broker.positions.items()}
         if square_off and self.broker.positions:
             retry = getattr(self.broker, "retry_close", None) if self.mode == "live" else None
             for c, pos in sorted(list(self.broker.positions.items()), key=lambda kv: kv[1].qty > 0):
@@ -565,6 +573,7 @@ class Session:
                     problems.append(f"{c.label}: {e}")
         if live and square_off and self.broker.working:
             problems += settle()                             # e.g. an opening order whose cancel was not confirmed
+        self._tell_squared_off(held, reason)
         if live and square_off and not problems and self.broker.positions:
             problems.append("a leg filled late: " + ", ".join(c.label for c in self.broker.positions))
         msg = reason + (" Positions were squared off." if square_off and not problems else "")
@@ -584,6 +593,22 @@ class Session:
         if problems:
             msg += " COULD NOT CLOSE: " + "; ".join(problems) + " - close these in Kite now."
         self._finish(msg, now)
+
+    def _tell_squared_off(self, held: dict, reason: str) -> None:
+        """Legs the session squared off itself (Stop, a halt, its retries): the strategy is told, as for a leg closed in
+        Kite, so its own record does not keep them open (23 Nov: after Stop and Resume it still thought the CE was
+        open)."""
+        ctx = getattr(self.stepper, "ctx", None)
+        tell = getattr(self.strategy, "on_squared_off", None)
+        if ctx is None or tell is None:
+            return
+        for c, q in held.items():
+            now_q = abs(self.broker.positions[c].qty) if c in self.broker.positions else 0
+            if now_q < q:
+                try:
+                    tell(ctx, c, q - now_q, reason)
+                except Exception as e:  # noqa: BLE001 - the square-off itself is done; a strategy bug must not undo it
+                    self._log(f"Strategy not told of the square-off of {c.label}: {type(e).__name__}: {e}")
 
     def _retry_close(self, now) -> None:
         """Closing only: try again to close what the square-off could not. Each try sends only what Zerodha still holds
@@ -614,6 +639,7 @@ class Session:
             return
         self.close_tries += 1
         problems, blocked = [], False
+        held = {c: abs(p.qty) for c, p in self.broker.positions.items()}
         try:
             problems += self.broker.settle_working(now)     # every order that may still fill, opening ones too
         except Exception as e:  # noqa: BLE001
@@ -626,6 +652,7 @@ class Session:
                 problems.append(f"{c.label}: {e}")
             except Exception as e:  # noqa: BLE001
                 problems.append(f"{c.label}: {e}")
+        self._tell_squared_off(held, self.halted)
         self._close_tried = _time.time()            # counted from the end of the try
         if not self.broker.positions and not getattr(self.broker, "working", None):
             cancel = getattr(self.broker, "cancel_all_protective", None)
@@ -698,7 +725,7 @@ class Session:
             "time": ctx.now.isoformat(), "spot": ctx.spot, "vix": ctx.vix, "lot_size": ctx.lot_size,
             "equity": point[1], "net_realized": b.net_realized, "unrealized": ctx.unrealized,
             "positions": positions,
-            "broker": b.to_dict(), "strategy_state": self.strategy.get_state(),
+            "broker": b.to_dict(), "strategy_state": self.strategy.get_state(), "resume_seen": self.resume_seen,
             "preset": self.want.get("preset"), "risk": self.risk_settings, "risk_state": self.risk.get_state() if self.risk is not None else None, "logs": self.logs[-300:],
         })
         self.bars += 1

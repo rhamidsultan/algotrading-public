@@ -4,6 +4,18 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Resume with nothing open starts a fresh cycle (23 Nov 2026, pull request "fresh-cycle-on-resume")
+
+- Why (23 Nov, intraday_strangle-4): straddle sold 09:20, PE leg stop 09:24, Stop at 09:35 (CE bought back),
+  Resume 09:36. The strategy still thought the CE was open (Stop squares off without telling it) and waited all day.
+- Now Resume on the card marks desired.json `resumed`; the engine, finding nothing open, asks the strategy for a
+  fresh cycle (`Strategy.fresh_cycle`, once per press: a restart after an update is not a resume).
+  intraday_strangle forgets today's cycle and starts a new one at the next bar, before `last_entry_time`, with the
+  entry checks; a day it closed itself (day loss / target / 15:15) stays closed. Other strategies: unchanged.
+- Stop (and any halt or its close retries) now also tells the strategy which legs it squared off
+  (`Strategy.on_squared_off`, by default as a leg closed in Kite): intraday_strangle marks them "(closed by Stop)",
+  no re-entry, so its record never shows a closed leg as open.
+
 ## Re-check today and the session archive (20 Nov 2026, pull request "recheck-and-archive")
 
 - **Re-check today** (a running session's card, when its strategy said "No trade today" / "No entry today" and

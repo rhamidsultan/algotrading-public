@@ -994,6 +994,8 @@ def api_start():
     (d / "STOP").unlink(missing_ok=True)
     (d / "status.txt").unlink(missing_ok=True)
     (d / "archived").unlink(missing_ok=True)       # started again: back on the page
+    if (d / "state.json").exists():                 # Resume (not a first start): the engine starts a fresh cycle if
+        want["resumed"] = time.strftime("%Y-%m-%d %H:%M:%S")   # nothing is open (strategy.fresh_cycle)
     _write(d / "desired.json", want)
     try:
         _write(d / "started_by.json", {"user": current_user(), "at": time.strftime("%Y-%m-%d %H:%M")})

@@ -54,6 +54,17 @@ class Strategy:
         The other legs are kept. The default needs nothing: ctx.close() only closes what is held. A strategy that
         re-enters or rolls a leg overrides this so the leg Hamid closed is not traded again in that trade."""
 
+    def on_squared_off(self, ctx, contract, qty: int, reason: str) -> None:
+        """The session squared off a leg itself (Stop on the card, a halt): the strategy forgets it as open. By default
+        as a leg closed in Kite (on_outside_close)."""
+        self.on_outside_close(ctx, contract, qty)
+
+    def fresh_cycle(self, today: str) -> str | None:
+        """Resumed from the dashboard on the same day with nothing open (after Stop): forget today's cycle so a new
+        one starts at the next bar, within the entry window and with the entry checks. Returns a line for the log,
+        or None if the strategy has nothing to forget (it then carries on as it was). The default: nothing."""
+        return None
+
     def recheck_today(self, today: str) -> str | None:
         """Forget today's "no trade today" decision so the entry filters are checked again at the next bar (Re-check
         on the card). Returns what was cleared, or None if there was nothing to clear. The default: nothing."""
