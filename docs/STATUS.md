@@ -21,6 +21,9 @@ Newest information first within each section.
 - Now live and paper on Zerodha prices read the previous close of NIFTY and VIX from Zerodha's quote (`ohlc.close`,
   one request a day, `KiteFeed._load_previous_close`) and the gap and VIX-spike filters use it; the strategy's daily
   record is corrected too. Backtests are unchanged (full days in the data).
+- 20 Nov afternoon the filter said "+11.94%": a close that puts NIFTY more than 8% away (it halts at 10%) is now
+  treated as a bad reading and not used (the session's own record is tried next), and the "No trade today" line
+  shows the numbers and their source ("26,030.00 now, close 25,300.00 (Zerodha)") (pull request "gap-sanity").
 
 ## Protective stops below the circuit limit (19 Nov 2026, pull request "stop-circuit-cap")
 

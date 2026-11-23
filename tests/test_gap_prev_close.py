@@ -56,3 +56,21 @@ def test_the_kite_feed_reads_the_previous_close():
     feed.kite = K()
     feed._load_previous_close()
     assert feed.prev_close == 25300.0 and feed.prev_vix_close == 12.4
+
+
+def test_an_unbelievable_close_is_not_used():
+    """20 Nov: "+11.94%". A close that puts NIFTY more than 8% away is a bad reading: not used, said once."""
+    f = RegimeFilter()
+    f.observe(Ctx(datetime(2026, 11, 19, 15, 29), 25300.0))
+    today = Ctx(datetime(2026, 11, 20, 9, 20), 25335.0, prev_close=22630.0)
+    f.observe(today)
+    assert f.check(today, P()) is None                         # its own record (25,300): +0.14%
+    assert f.days[-1][1] == 25300.0 and any("not believable" in m for m in today.logs)
+
+
+def test_the_skip_message_shows_the_numbers():
+    f = RegimeFilter()
+    today = Ctx(datetime(2026, 11, 20, 9, 20), 25600.0, prev_close=25300.0)
+    f.observe(today)
+    why = f.check(today, P())
+    assert "25,600.00 now, close 25,300.00 (Zerodha)" in why
