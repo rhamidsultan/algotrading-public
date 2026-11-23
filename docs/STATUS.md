@@ -4,6 +4,17 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Positions page: trailing SL and % entry (23 Nov 2026, pull request "positions-trail-pct")
+
+- SL / target can be entered as a price or as % of the average price ("₹ price / % of avg"; a short's SL is above
+  the average, its target below; signed, so an SL already past the average keeps its side). Save never removes a
+  GTT: only Remove GTT does (`remove: true` on /api/positions/protect).
+- **Trail SL by x % or pts** (needs a saved SL): the GTT's SL follows the best bid/ask midpoint since it was set
+  (lowest for a short, highest for a long), only in the position's favour, every 15 s from 09:15 to 15:40, from a
+  fresh two-sided quote no older than 2 minutes; the target stays. One dashboard process moves them (file lock);
+  never while a close runs or on a position a LIVE session holds. The trail ends (alert) when the position closes,
+  changes size or average price, or its GTT changes. Kept in `server/portfolio/data/positions_trails.json`.
+
 ## Resume with nothing open starts a fresh cycle (23 Nov 2026, pull request "fresh-cycle-on-resume")
 
 - Why (23 Nov, intraday_strangle-4): straddle sold 09:20, PE leg stop 09:24, Stop at 09:35 (CE bought back),
