@@ -5,6 +5,7 @@ Every session lives in runtime/sessions/<id>/ (the first session of a strategy u
 name as its id, later ones add -2, -3, ...), with
     state.json     account, positions, strategy state and recent log (saved after every update)
     equity.csv     account value, one point a minute
+    levels.csv     the account if the open legs left at their SLs / targets, one point a minute (P&L chart lines)
     desired.json   present while the session should run (written by a dashboard)
     heartbeat      updated while it runs
     STOP           a stop request (for sessions started from the command line)
@@ -181,7 +182,7 @@ def reset(sid: str | None = None) -> None:
     sid = _sid(sid)
     if sid:
         slot = Slot(sid)
-        for f in (slot.state, slot.equity, slot.stop, slot.status):
+        for f in (slot.state, slot.equity, slot.stop, slot.status, slot.dir / "levels.csv"):
             f.unlink(missing_ok=True)
 
 
@@ -702,15 +703,82 @@ class Session:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _levels(self, ctx) -> dict:
+        """Each open leg's SL and target now: the strategy's own (leg_levels) and the session's risk rules (the nearer
+        SL of the two), and, live, the protective stop at Zerodha. A trailing stop shows where it has moved to."""
+        out = {}
+        try:
+            own = self.strategy.leg_levels(ctx) or {}
+        except Exception:  # noqa: BLE001 - only shown: never stops the session
+            own = {}
+        risk = self.risk.status() if self.risk is not None else {}
+        zer = getattr(self.broker, "protect_level", {}) or {}
+        for c, p in self.broker.positions.items():
+            lv = dict(own.get(c.label) or {})
+            r = risk.get(c.label)
+            if r is not None:
+                sl = lv.get("sl")
+                lv["sl"] = r if sl is None else (min(sl, r) if p.qty < 0 else max(sl, r))
+            if self.mode == "live" and zer.get(c.label):
+                lv["zerodha"] = round(float(zer[c.label]), 2)
+            if lv:
+                out[c.label] = lv
+        return out
+
+    def _log_levels(self, levels: dict) -> None:
+        """The activity log says each leg's SL / target when it opens, and each move (a trail)."""
+        prev = getattr(self, "_levels_seen", {})
+        for label, lv in levels.items():
+            was = prev.get(label)
+            parts = [f"SL {lv['sl']:.2f}" if lv.get("sl") else "", f"target {lv['target']:.2f}" if lv.get("target") else "",
+                     f"Zerodha stop {lv['zerodha']:.2f}" if lv.get("zerodha") else ""]
+            if was is None:
+                if any(parts):
+                    self._log(f"{label}: " + " · ".join(x for x in parts if x))
+                continue
+            for k, name in (("sl", "SL"), ("target", "Target"), ("zerodha", "Zerodha stop")):
+                a, b = was.get(k), lv.get(k)
+                if a and b and abs(a - b) >= 0.01:
+                    self._log(f"{label}: {name} moved {a:.2f} -> {b:.2f}")
+                elif b and not a:
+                    self._log(f"{label}: {name} {b:.2f}")
+        self._levels_seen = {k: dict(v) for k, v in levels.items()}
+
+    @staticmethod
+    def _at_levels(ctx, positions, levels, kind) -> float | None:
+        """The account if every open leg that has this level (SL or target) left at it now, the others at their
+        price: the P&L chart's SL (red) and target (green) lines. None if no leg has one."""
+        moved, any_ = 0.0, False
+        for c, p in positions.items():
+            lv = (levels.get(c.label) or {}).get(kind)
+            if lv:
+                moved += (lv - ctx.price(c)) * p.qty
+                any_ = True
+        return moved if any_ else None
+
     def _after_bar(self, ctx, point) -> None:
+        b = self.broker
+        levels = self._levels(ctx)
+        self._log_levels(levels)
         minute = point[0].replace(second=0, microsecond=0)
         if minute != self._minute:   # the account-value history keeps one point a minute
             self._minute = minute
             with self.slot.equity.open("a") as f:
                 f.write(f"{point[0].isoformat(sep=' ')},{point[1]:.2f},{point[2]:.2f}\n")
-        b = self.broker
+            sl, tg = (self._at_levels(ctx, b.positions, levels, k) for k in ("sl", "target"))
+            if sl is not None or tg is not None:      # the account at the legs' SLs / targets (P&L chart lines)
+                f2 = self.slot.dir / "levels.csv"
+                new = not f2.exists()
+                with f2.open("a") as f:
+                    if new:
+                        f.write("time,at_sl,at_target\n")
+                    f.write(f"{point[0].isoformat(sep=' ')},{'' if sl is None else f'{point[1] + sl:.2f}'},"
+                            f"{'' if tg is None else f'{point[1] + tg:.2f}'}\n")
         positions = [{"Contract": c.label, "Qty": p.qty, "Avg price": round(p.avg_price, 2),
-                      "LTP": round(ctx.price(c), 2), "P&L": round((ctx.price(c) - p.avg_price) * p.qty, 0)}
+                      "LTP": round(ctx.price(c), 2), "P&L": round((ctx.price(c) - p.avg_price) * p.qty, 0),
+                      **{k: v for k, v in (("SL", (levels.get(c.label) or {}).get("sl")),
+                                           ("Target", (levels.get(c.label) or {}).get("target")),
+                                           ("Zerodha SL", (levels.get(c.label) or {}).get("zerodha"))) if v}}
                      for c, p in b.positions.items()]
         _write_json(self.slot.tick, {"time": ctx.now.isoformat(), "spot": ctx.spot, "vix": ctx.vix, "equity": point[1],
                                      "unrealized": ctx.unrealized, "positions": positions,

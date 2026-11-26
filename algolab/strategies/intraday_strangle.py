@@ -129,6 +129,15 @@ class IntradayStrangle(Strategy):
                 leg.update(open=True, sold=f.price, stop=f.price * (1 + p.leg_stop_pct / 100),
                            reentries=leg["reentries"] + 1)
 
+    def leg_levels(self, ctx) -> dict:
+        d = self.day or {}
+        out = {}
+        for c in ctx.positions:
+            leg = (d.get("legs") or {}).get(c.right)
+            if leg and leg.get("open") and leg.get("strike") == c.strike and leg.get("stop"):
+                out[c.label] = {"sl": round(float(leg["stop"]), 2)}
+        return out
+
     def on_squared_off(self, ctx, contract, qty, reason) -> None:
         """Stop on the card (or a halt) closed a leg: out, no re-entry; a Resume starts a fresh cycle (fresh_cycle)."""
         d = self.day

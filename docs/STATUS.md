@@ -4,6 +4,16 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## SL and target shown: log, position rows, P&L chart (26 Nov 2026, pull request "sl-target-show")
+
+- Each open leg's SL / target: the strategy's own (`Strategy.leg_levels`, intraday_strangle: its leg stop, moved
+  by trail-to-cost) and the session's risk-rule stops (the nearer SL), plus, live, the protective stop at Zerodha.
+- Activity log: "<leg>: SL 128.25 · Zerodha stop 281.55" when a leg opens, "<leg>: SL moved 128.25 -> 93.85" at
+  each move (trailing). Position rows: SL (red), target (green), Zerodha stop, how far away, and a bar from target
+  (or entry) to SL with the price on it.
+- P&L chart (Overall and the cycle view): red "At SL" and green "At target" step lines, the P&L if the open legs
+  left at those levels at that moment, so a trail shows as a step. Kept per minute in the session's `levels.csv`.
+
 ## Positions page: trailing SL and % entry (23 Nov 2026, pull request "positions-trail-pct")
 
 - SL / target can be entered as a price or as % of the average price ("₹ price / % of avg"; a short's SL is above

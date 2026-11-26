@@ -113,3 +113,4 @@ Dated, newest first. One line each; link the pull request when there is one.
 - 2026-11-20 — Re-check today button on a session whose strategy skipped the day; archive for old sessions, several at once (Hamid).
 - 2026-11-23 — A LIVE session stopped and resumed on the same day with nothing open starts a fresh cycle (Hamid).
 - 2026-11-23 — Positions page: trailing SL (by % or points from the best price) and SL / target as % of the average price (Hamid).
+- 2026-11-26 — Live: SL / target of each leg in the activity log (with trailing moves), on the position rows and as red / green lines on the P&L chart (Hamid).

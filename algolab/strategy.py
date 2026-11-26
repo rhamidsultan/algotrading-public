@@ -54,6 +54,12 @@ class Strategy:
         The other legs are kept. The default needs nothing: ctx.close() only closes what is held. A strategy that
         re-enters or rolls a leg overrides this so the leg Hamid closed is not traded again in that trade."""
 
+    def leg_levels(self, ctx) -> dict:
+        """Each open leg's own exit levels, for the card, the log and the P&L chart: {contract label: {"sl": price,
+        "target": price}} (either may be missing). The default: none (the session still shows its risk-rule stops
+        and, live, the protective stop at Zerodha)."""
+        return {}
+
     def on_squared_off(self, ctx, contract, qty: int, reason: str) -> None:
         """The session squared off a leg itself (Stop on the card, a halt): the strategy forgets it as open. By default
         as a leg closed in Kite (on_outside_close)."""
