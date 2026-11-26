@@ -213,7 +213,26 @@ def _cycle_curve(path, capital, b, limit=400):
         if k not in thin:
             thin.append(k)
     thin.sort()
-    return {"points": thin, "hi": hi, "lo": lo, "label": label, "from": start, "to": end or pts[-1][0]}
+    return {"points": thin, "hi": hi, "lo": lo, "label": label, "from": start, "to": end or pts[-1][0],
+            "levels": _levels_series(path.parent / "levels.csv", capital + base, start, end, limit)}
+
+
+def _levels_series(path, base, start=None, end=None, limit=400):
+    """The P&L if the open legs left at their SLs / targets (levels.csv, one point a minute), measured like the chart
+    it goes on (`base`: the capital, or the account before the cycle): [[time, at SL, at target], ...]."""
+    out = []
+    try:
+        with path.open(encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                t = r["time"][:16].replace("T", " ")
+                if (start and t < start) or (end and t > end):
+                    continue
+                a, g = r.get("at_sl") or "", r.get("at_target") or ""
+                out.append([t, round(float(a) - base, 2) if a else None, round(float(g) - base, 2) if g else None])
+    except (OSError, ValueError, KeyError):
+        return []
+    step = max(1, len(out) // limit)
+    return out[::step] + ([out[-1]] if out and (len(out) - 1) % step else [])
 
 
 def _pnl_analysis(path, capital, trades, limit=400):
@@ -641,7 +660,8 @@ def _session_view(x):
         out["skipped_today"] = _skipped_today(s)
         an = _pnl_analysis(x["equity"], b["capital"], b["trades"])
         out["equity"] = an["points"]
-        out["pnl"] = {"hi": an["hi"], "lo": an["lo"], "daily": an["daily"][-120:], "metrics": an["metrics"]}
+        out["pnl"] = {"hi": an["hi"], "lo": an["lo"], "daily": an["daily"][-120:], "metrics": an["metrics"],
+                      "levels": _levels_series(x["equity"].parent / "levels.csv", b["capital"])}
         try:
             out["pnl"]["cycle"] = _cycle_curve(x["equity"], b["capital"], b)
         except (KeyError, TypeError, ValueError):
@@ -5295,7 +5315,11 @@ details.archived{margin-top:12px}details.archived>summary{cursor:pointer;font-si
 .ixline b{color:var(--text);font-weight:600}
 .ixline .secbar{margin:0 0 0 auto;display:flex;gap:4px}
 .plist{font-variant-numeric:tabular-nums}
-.prow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 2px;border-top:1px solid var(--line)}
+.prow{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;padding:8px 2px;border-top:1px solid var(--line)}
+.lvrow{flex-basis:100%;margin-top:-4px}.lvrow .ps{font-size:12px}
+.lvbar{position:relative;height:6px;border-radius:3px;margin-top:5px;background:linear-gradient(90deg,color-mix(in srgb,var(--up) 35%,transparent),color-mix(in srgb,var(--down) 45%,transparent))}
+.lvbar .lvfill{position:absolute;left:0;top:0;bottom:0;border-radius:3px}
+.lvbar .lvdot{position:absolute;top:50%;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--text);border:2px solid var(--card)}
 .prow:first-child{border-top:0}
 .prow .pc{font-weight:600;font-size:14px;color:var(--text);text-decoration:none;display:inline-block;padding:4px 8px 4px 0;margin:-4px 0}
 a.pc:hover{color:var(--accent)}
@@ -5875,7 +5899,22 @@ function posRow(p) {
   const sold = p.Qty < 0;
   return `<div class="prow"><div><a class="pc" href="${(chartLink(p.Contract).match(/href="([^"]+)"/) || [, "#"])[1]}">${short}</a>
       <div class="ps">${icon(sold ? "sold" : "bought", sold ? "Sold" : "Bought")}${Math.abs(p.Qty)} · ${exp}</div></div>
-    <div class="pr"><div class="pv ${sign(p["P&L"])}">${ainr(p["P&L"])}</div><div class="ps">${p["Avg price"].toFixed(2)} → ${p.LTP.toFixed(2)}</div></div></div>`;
+    <div class="pr"><div class="pv ${sign(p["P&L"])}">${ainr(p["P&L"])}</div><div class="ps">${p["Avg price"].toFixed(2)} → ${p.LTP.toFixed(2)}</div></div>${levelsRow(p)}</div>`;
+}
+// a leg's SL (red) and target (green) and where its price is between them; Zerodha's protective stop alongside
+function levelsRow(p) {
+  const sl = p.SL, tg = p.Target, z = p["Zerodha SL"];
+  if (!sl && !tg && !z) return "";
+  const parts = [sl ? `<span class="down">SL ${sl.toFixed(2)}</span>` : "", tg ? `<span class="up">Target ${tg.toFixed(2)}</span>` : "",
+                 z ? `<span class="mt" title="the stop order at Zerodha (holds if the server is off)">Zerodha ${z.toFixed(2)}</span>` : ""].filter(Boolean);
+  let bar = "";
+  if (sl) {                                           // 0% at the target (or the entry), 100% at the SL
+    const far = tg || p["Avg price"], span = sl - far, at = span ? Math.max(0, Math.min(1, (p.LTP - far) / span)) : 0;
+    const left = Math.round(at * 100);
+    bar = `<div class="lvbar" title="${tg ? "target" : "entry"} ${far.toFixed(2)} … SL ${sl.toFixed(2)}: the price is ${left}% of the way to the SL">
+      <span class="lvfill" style="width:${left}%"></span><span class="lvdot" style="left:${left}%"></span></div>`;
+  }
+  return `<div class="lvrow"><div class="ps">${parts.join(" · ")}${sl ? ` · ${Math.abs(sl - p.LTP).toFixed(2)} away` : ""}</div>${bar}</div>`;
 }
 // a leg closed in the open cycle: quantity 0 (was sold/bought N), entry -> exit, what it booked before charges
 function closedRow(p) {
@@ -6173,10 +6212,20 @@ function drawChart(id, canvas, points, pnl) {
   const ds = [{data: points.map(p => p[1]), borderColor: css.getPropertyValue("--accent").trim(), borderWidth: 1.6, pointRadius: 0, tension: 0, label: "P&L"}];
   if (hi) ds.push({data: mark(hi), label: "Highest", pointRadius: 5, pointHoverRadius: 6, showLine: false, pointBackgroundColor: css.getPropertyValue("--up").trim(), borderColor: css.getPropertyValue("--up").trim()});
   if (lo) ds.push({data: mark(lo), label: "Lowest", pointRadius: 5, pointHoverRadius: 6, showLine: false, pointBackgroundColor: css.getPropertyValue("--down").trim(), borderColor: css.getPropertyValue("--down").trim()});
+  // the P&L if the open legs left at their SLs (red) / targets (green) at that moment: steps as a stop trails
+  const lv = (pnl && pnl.levels) || [];
+  if (lv.length) {
+    const at = {}; lv.forEach(r => { at[String(r[0]).slice(0, 16)] = r; });
+    const pick = i => points.map(p => { const r = at[String(p[0]).slice(0, 16).replace("T", " ")]; return r && r[i] != null ? r[i] : null; });
+    const sl = pick(1), tg = pick(2);
+    if (sl.some(v => v != null)) ds.push({data: sl, label: "At SL", borderColor: css.getPropertyValue("--down").trim(), borderWidth: 1.4, borderDash: [5, 3], pointRadius: 0, stepped: true, spanGaps: false});
+    if (tg.some(v => v != null)) ds.push({data: tg, label: "At target", borderColor: css.getPropertyValue("--up").trim(), borderWidth: 1.4, borderDash: [5, 3], pointRadius: 0, stepped: true, spanGaps: false});
+  }
   charts[id] = new Chart(canvas, {type: "line",
     data: {labels: points.map(p => whenShort(p[0])), datasets: ds},
     options: {responsive: true, maintainAspectRatio: false, animation: false,
-      plugins: {legend: {display: false}, tooltip: {filter: c => c.parsed.y != null, callbacks: {label: c => (c.datasetIndex ? c.dataset.label + " " : "") + inr(c.parsed.y)}}},
+      plugins: {legend: {display: ds.some(d => d.label.startsWith("At ")), labels: {boxWidth: 12, color: css.getPropertyValue("--muted").trim(), filter: i => i.text.startsWith("At ")}},
+        tooltip: {filter: c => c.parsed.y != null, callbacks: {label: c => (c.datasetIndex ? c.dataset.label + " " : "") + inr(c.parsed.y)}}},
       scales: {x: {ticks: {maxTicksLimit: innerWidth < 600 ? 3 : 5, maxRotation: 0, autoSkip: true, color: css.getPropertyValue("--muted").trim(),
                          callback: function (v) { const l = String(this.getLabelForValue(v)); return l.replace(/,? \d{2}:\d{2}$/, ""); }}, grid: {display: false}},
                y: {ticks: {callback: v => inr(v), color: css.getPropertyValue("--muted").trim(), maxTicksLimit: 6},
