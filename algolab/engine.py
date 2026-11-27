@@ -442,10 +442,12 @@ def price_metrics(res: Result, feed, df: pd.DataFrame) -> None:
         res.metrics["Strikes skipped as thinly traded"] = st["thin_strikes"]
 
 
-def backtest(cfg: dict, strategy, dataset: str, start=None, end=None, risk=None, not_before: dict | None = None) -> Result:
+def backtest(cfg: dict, strategy, dataset: str, start=None, end=None, risk=None, not_before: dict | None = None,
+             progress=None) -> Result:
+    """progress(n, total): called as each day starts (1-second bars only; the others are quick)."""
     from .sec1_feed import SEC1_DATASET
     if dataset == SEC1_DATASET:
-        return backtest_sec1(cfg, strategy, start, end, risk, not_before)
+        return backtest_sec1(cfg, strategy, start, end, risk, not_before, progress=progress)
     from .feeds import HistoricalFeed, OptionStore, load_dataset
     df = load_dataset(dataset, start, end)
     store = OptionStore(cfg["market"]["underlying"])
@@ -475,7 +477,8 @@ def backtest(cfg: dict, strategy, dataset: str, start=None, end=None, risk=None,
     return res
 
 
-def backtest_sec1(cfg: dict, strategy, start=None, end=None, risk=None, not_before: dict | None = None) -> Result:
+def backtest_sec1(cfg: dict, strategy, start=None, end=None, risk=None, not_before: dict | None = None,
+                  progress=None) -> Result:
     """Step the strategy every second on the recorded 1-second bars (algolab/sec1_feed.py), as paper does."""
     from .config import to_date
     from .feeds import Feed, OptionStore
@@ -486,7 +489,8 @@ def backtest_sec1(cfg: dict, strategy, start=None, end=None, risk=None, not_befo
     lo, hi = (to_date(start) if start is not None else days[0]), (to_date(end) if end is not None else days[-1])
     cal = Feed(cfg)
     want = [lo + timedelta(days=i) for i in range((hi - lo).days + 1)]
-    feed = Sec1Feed(cfg, days, store=OptionStore(cfg["market"]["underlying"]), index_close=index_close_from_minute_set)
+    feed = Sec1Feed(cfg, days, store=OptionStore(cfg["market"]["underlying"]), index_close=index_close_from_minute_set,
+                    progress=progress)
     if not feed.days:
         raise ValueError("The 1-second bars of those days are incomplete: " + "; ".join(feed.skipped_days))
     gaps = [d for d in want if cal.is_trading_day(d) and d not in set(feed.days)]

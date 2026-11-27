@@ -4671,7 +4671,7 @@ def api_compare_keep():
 MAC_BEAT = RT / "mac-agent.json"
 MAC_ONLINE_S = 60
 _BT_FIELDS = {"status", "message", "progress", "run", "metrics", "sweep", "columns", "rows", "total",
-              "periods", "luck", "walk", "fold_dates", "optimise", "td"}          # sweep extras: walk-forward, Find best settings
+              "periods", "luck", "walk", "fold_dates", "optimise", "td", "step"}          # sweep extras: walk-forward, Find best settings
 
 
 def _mac_status():
@@ -6931,7 +6931,7 @@ function jobs() {
         <span class="down" title="Max drawdown">${m["Max drawdown"] != null ? "↓ " + inr(m["Max drawdown"]) : ""}</span></div>`
       : j.status === "failed" ? `<div class="down" style="font-size:13px">${esc(j.message)}</div>` : "";
     if (j.kind === "sweep") return sweepJob(j);
-    const head = `<div class="t">${esc(j.title || j.strategy)}</div><div class="muted">${j.target === "mac" ? "Mac" : "Server"} · ${esc(j.dataset)} · ${dd(j.from)} – ${j.to ? dd(j.to) : "latest"}${j.note ? " · " + esc(j.note) : ""}${j.target === "mac" && j.status === "queued" && !(D.mac || {}).online ? " · waits for the Mac" : ""}${j.target === "mac" && j.status === "running" && !(D.mac || {}).online ? " · Mac asleep: carries on when it wakes" : ""}</div>`;
+    const head = `<div class="t">${esc(j.title || j.strategy)}</div><div class="muted">${j.target === "mac" ? "Mac" : "Server"} · ${esc(j.dataset)} · ${dd(j.from)} – ${j.to ? dd(j.to) : "latest"}${j.note ? " · " + esc(j.note) : ""}${j.target === "mac" && j.status === "queued" && !(D.mac || {}).online ? " · waits for the Mac" : ""}${j.status === "running" && j.step === "sync" ? " · copying new prices from the server (the first time with 1-second bars this can take 15 minutes)" : ""}${j.status === "running" && j.step === "day" && j.progress ? ` · day ${j.progress[0]} of ${j.progress[1]}` : ""}${j.target === "mac" && j.status === "running" && !(D.mac || {}).online ? " · Mac asleep: carries on when it wakes" : ""}</div>`;
     const inner = `<span class="st ${CLS[j.status] || "muted"}" title="${TITLE[j.status] || j.status}" aria-label="${TITLE[j.status] || j.status}">${SVG[j.status] || ""}</span><div class="b">${head}${figs}</div>`;
     return j.status === "done" && j.run ? `<a class="job" href="/backtests?run=${encodeURIComponent(j.run)}">${inner}</a>` : `<div class="job">${inner}</div>`;
   }).join("") + ended() : `Nothing running. Finished backtests are in <a href="/backtests">Results</a>.${ended()}`;

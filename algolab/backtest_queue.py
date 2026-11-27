@@ -236,7 +236,9 @@ def run_optimise(job: dict, grid: dict, limit: int, cfg: dict | None = None, wor
             "periods": labels, "fold_dates": out["fold_dates"], "walk": out["walk"]}
 
 
-def run_one(job: dict, store: Path | None = None, cfg: dict | None = None, publish=None, where: str = "the server") -> dict:
+def run_one(job: dict, store: Path | None = None, cfg: dict | None = None, publish=None, where: str = "the server",
+            progress=None) -> dict:
+    """progress(n, total): days done, for the page ("day 3 of 22"); by default written into the job's status."""
     from .engine import backtest
     from .feeds import list_datasets
     from . import runs
@@ -255,7 +257,11 @@ def run_one(job: dict, store: Path | None = None, cfg: dict | None = None, publi
         job = {**job, "risk": rk}
     strat = strategies[job["strategy"]](**strategy_params(strategies[job["strategy"]], own, rk))
     cfg = job_config(job, cfg)
-    res = backtest(cfg, strat, job["dataset"], start, end)
+    if progress is None and job.get("id") and ID_OK.match(str(job["id"])):
+        def progress(n, t):
+            _status(job, status="running", progress=[n, t], step="day")
+    from .sec1_feed import SEC1_DATASET
+    res = backtest(cfg, strat, job["dataset"], start, end, **({"progress": progress} if job["dataset"] == SEC1_DATASET else {}))
     note = (job.get("note") or "").strip()
     preset = job.get("preset") if isinstance(job.get("preset"), dict) else None
     if preset and preset.get("name"):

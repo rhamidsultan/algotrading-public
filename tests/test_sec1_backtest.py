@@ -172,3 +172,36 @@ def test_no_bars_at_all_is_refused(root):
         engine.backtest(load_config(), At(), SEC1_DATASET, DAY, DAY)
     with pytest.raises(ValueError):
         engine.backtest(load_config(), At(), SEC1_DATASET, date(2026, 10, 19), date(2026, 10, 23))
+
+
+def test_strikes_listed_from_the_top_of_their_files_only(root, monkeypatch):
+    """listed_strikes knows whether a strike has traded from the first rows of its file, without loading the day
+    (~300 files, ~320 MB a day); whole files are loaded only for strikes a strategy prices. Days are reported."""
+    from algolab import sec1_feed
+    _full_index(root, DAY)
+    _write(root, DAY, f"{EXPIRY}_25000CE", [(f"{DAY} 09:20:05", 100, 99.5, 100.5)])
+    _write(root, DAY, f"{EXPIRY}_25100CE", [(f"{DAY} 11:00:00", 60, 59.5, 60.5)])
+    feed = Sec1Feed(load_config(), [DAY], progress=lambda n, t: seen.append((n, t)))
+    seen = []
+    loads = []
+    real = sec1_feed._read
+    monkeypatch.setattr(sec1_feed, "_read", lambda p: (loads.append(p.name), real(p))[1])
+    for now in feed:
+        hm = now.strftime("%H:%M:%S")
+        if hm == "09:20:05":
+            assert feed.listed_strikes(EXPIRY, "CE") == set()          # the 09:20:05 row is known from 09:20:06
+        elif hm == "09:20:06":
+            assert feed.listed_strikes(EXPIRY, "CE") == {25000}
+        elif hm == "11:00:01":
+            assert feed.listed_strikes(EXPIRY, "CE") == {25000, 25100}
+            break
+    assert not [n for n in loads if "_251" in n or "_250" in n]          # no option file loaded just to list strikes
+    assert seen == [(1, 1)]
+
+
+def test_backtest_reports_each_day(root):
+    _full_index(root, DAY)
+    _full_index(root, EXPIRY)
+    days = []
+    engine.backtest(load_config(), At(sell="23:00:00"), SEC1_DATASET, DAY, EXPIRY, progress=lambda n, t: days.append((n, t)))
+    assert days == [(1, 2), (2, 2)]

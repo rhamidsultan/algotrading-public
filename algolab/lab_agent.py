@@ -155,6 +155,7 @@ class Agent:
                 self.log(f"Job {job['id']} failed: {e}")
             return True
         self.log("Copying new prices from the server")
+        self.status(job, status="running", step="sync")       # the page: "copying new prices from the server"
         note = self.sync(self.log)
         try:
             if job.get("kind") == "sweep":
@@ -166,7 +167,9 @@ class Agent:
                         self.status(job, status="running", progress=[n, t])
                 out = run_sweep(job, workers=safe_workers(), progress=progress)
             else:
-                out = run_one(job, publish=self.publish, where=f"the Mac ({self.name})")
+                def days(n, t):
+                    self.status(job, status="running", progress=[n, t], step="day")
+                out = run_one(job, publish=self.publish, where=f"the Mac ({self.name})", progress=days)
             self.status(job, status="done", message=note, **out)
             self.log(f"Job {job['id']} done")
         except Exception as e:  # noqa: BLE001 - every failure is reported on the page
