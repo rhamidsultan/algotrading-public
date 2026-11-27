@@ -30,6 +30,8 @@ def dataset_label(name: str | None) -> str:
     """NIFTY_minute / TD_NIFTY_1minute -> NIFTY 1-min; NIFTY_5minute -> NIFTY 5-min."""
     if not name:
         return ""
+    if name == "NIFTY_1second":
+        return "NIFTY 1-sec"
     m = re.match(r"^(?:TD_|SAMPLE_)?([A-Z]+)_(\d*)minute$", name)
     return f"{m.group(1)} {m.group(2) or '1'}-min" if m else name
 
