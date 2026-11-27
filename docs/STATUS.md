@@ -4,6 +4,13 @@ Update this in every pull request that changes what is live, data coverage or wo
 Newest information first within each section.
 
 
+## Summary › Prices: no more false "No new price for 277778 h" (27 Nov 2026, pull request "prices-health")
+
+- The check read the engine's `runtime/feed_status.json` (JSON) as a bare timestamp; that always failed and its
+  "never" value (1e9 s) was shown as hours, every market day. Now (`algolab_panel._feed_health`): the age from the
+  file's own `time`; a warning only when a running session (desired.json + fresh heartbeat) uses Zerodha prices;
+  "No session needs Zerodha prices right now" when none does; "No price yet today" when nothing was saved.
+
 ## SL and target shown: log, position rows, P&L chart (26 Nov 2026, pull request "sl-target-show")
 
 - Each open leg's SL / target: the strategy's own (`Strategy.leg_levels`, intraday_strangle: its leg stop, moved

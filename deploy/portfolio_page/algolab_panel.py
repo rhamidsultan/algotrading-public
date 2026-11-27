@@ -2617,9 +2617,34 @@ def _recording_status(lines):
             "failed_in_row": in_row, "next": _next_recording()}
 
 
+def _feed_health():
+    """The Prices light. needs: a RUNNING session (desired.json and a fresh heartbeat) on Zerodha prices; age: seconds
+    since the engine last saved its price status (feed_status.json's own time, else the file's time), None if it has
+    none. (It used to read that JSON file as a bare timestamp, which always failed: "No new price for 277778 h".)"""
+    from datetime import datetime as _fd, timedelta as _ftd, timezone as _ftz
+    f = RT / "feed_status.json"
+    feed = _json(f) or {}
+    age = None
+    if feed:
+        try:
+            t = _fd.fromisoformat(str(feed.get("time")))
+            t = t if t.tzinfo else t.replace(tzinfo=_ftz(_ftd(hours=5, minutes=30)))
+            age = max(0.0, time.time() - t.timestamp())
+        except (TypeError, ValueError):
+            try:
+                age = max(0.0, time.time() - f.stat().st_mtime)
+            except OSError:
+                age = None
+    needs = []
+    for x in _slots():
+        w = _json(x["desired"]) or {}
+        if w.get("feed") == "kite" and _age(x["beat"]) < 60:
+            needs.append(x["id"])
+    return {"source": feed.get("source"), "age": None if age is None else round(age), "needs": needs}
+
+
 def _health():
     main = sys.modules.get("__main__")
-    feed = _json(RT / "feed_status.json")
     try:
         lines = (DATA / "collect_log.txt").read_text(encoding="utf-8").splitlines()[-10:]
     except OSError:
@@ -2631,7 +2656,7 @@ def _health():
     if hasattr(main, "market_open"):
         market = bool(main.market_open())   # also knows the NSE holidays
     return {"engine": _age(RT / "service_heartbeat") < 45, "market_open": market,
-            "feed": {"source": feed.get("source"), "age": round(_age(RT / "feed_status.json"))} if feed else None,
+            "feed": _feed_health(),
             "zerodha": bool(state.get("logged_in")) if state else None,
             "recording": _recording_status(lines),
             "server": _server(), "ibkr": _ibkr_status()}
@@ -2889,10 +2914,12 @@ function ago(sec) { return sec < 90 ? Math.round(sec) + " s" : sec < 5400 ? Math
 // prices: what the engine is using now, said plainly (an old price outside market hours is normal)
 function prices(h) {
   const f = h.feed;
-  if (!f) return ["", "No session is using Zerodha prices."];
-  if (f.source === "closed" || h.market_open === false) return ["", "Market closed: live prices start at 9:15 IST."];
+  if (h.market_open === false || (f && f.source === "closed")) return ["", "Market closed: live prices start at 9:15 IST."];
+  if (!f || !(f.needs || []).length) return ["", "No session needs Zerodha prices right now."];
+  const n = f.needs.length, who = `${n} running session${n > 1 ? "s" : ""}`;
+  if (f.age == null) return ["warn", `No price yet today for ${who}. The engine may be waiting for today's Zerodha login.`];
   const how = f.source === "stream" ? "Live stream (Zerodha ticks)" : f.source === "poll" ? "Asking Zerodha every few seconds (stream not available)" : f.source;
-  if (f.age > 30) return ["warn", `No new price for ${ago(f.age)}. The engine may be waiting for today's Zerodha login, or no session uses Zerodha prices.`];
+  if (f.age > 30) return ["warn", `No new price for ${ago(f.age)} (${who} on Zerodha prices). The engine may be waiting for today's Zerodha login.`];
   return [f.source === "stream" ? "on" : "warn", how];
 }
 // a small 24-hour line (SVG), 0-100 %
