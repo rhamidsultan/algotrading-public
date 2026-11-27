@@ -97,6 +97,28 @@ def job_config(job: dict, cfg: dict | None = None) -> dict:
     return cfg
 
 
+def known_dataset(name) -> bool:
+    """A price set backtests can use here: a file in data/spot, or the 1-second bars (data/sec1, sec1_feed)."""
+    from .feeds import list_datasets
+    from .sec1_feed import SEC1_DATASET
+    return name == SEC1_DATASET or name in list_datasets()
+
+
+def data_span(dataset: str, start=None, end=None):
+    """First and last day with index prices in [start, end]: for the 1-second bars, the days stored with the index file."""
+    from .sec1_feed import SEC1_DATASET, sec1_days
+    if dataset == SEC1_DATASET:
+        days = sec1_days(start, end)
+        if not days:
+            raise ValueError("No 1-second bars stored in that range (they are kept for the last few trading days only)")
+        return days[0], days[-1]
+    from .feeds import load_dataset
+    idx = load_dataset(dataset, start, end).index
+    if not len(idx):
+        raise ValueError("No index prices in that range")
+    return idx[0].date(), idx[-1].date()
+
+
 def run_sweep(job: dict, cfg: dict | None = None, workers: int = 1, progress=None) -> dict:
     """Every combination of the job's grid ({setting: [values]}); with job["split"] each one is backtested on the
     in-sample period (before the split date) and the out-of-sample period (from it). Rows carry the in/out (or
@@ -107,7 +129,7 @@ def run_sweep(job: dict, cfg: dict | None = None, workers: int = 1, progress=Non
     from .sweep import grid_size, neighbour_score, sweep
     if job.get("strategy") not in load_strategies():
         raise ValueError(f"No strategy called '{job.get('strategy')}'")
-    if job.get("dataset") not in list_datasets():
+    if not known_dataset(job.get("dataset")):
         raise ValueError(f"No data set called '{job.get('dataset')}' here")
     grid = {k: [str(v) for v in vals] for k, vals in (job.get("grid") or {}).items() if vals}
     if not grid:
@@ -124,13 +146,9 @@ def run_sweep(job: dict, cfg: dict | None = None, workers: int = 1, progress=Non
     n_folds = int(job.get("folds") or 0)
     fold_periods = None
     if n_folds:
-        from .feeds import load_dataset
         if not 3 <= n_folds <= 8:
             raise ValueError("Walk-forward takes 3 to 8 periods")
-        idx = load_dataset(job["dataset"], _day(job.get("from")), _day(job.get("to"))).index
-        if not len(idx):
-            raise ValueError("No index prices in that range")
-        fold_periods = folds(idx[0].date(), idx[-1].date(), n_folds)
+        fold_periods = folds(*data_span(job["dataset"], _day(job.get("from")), _day(job.get("to"))), n_folds)
     df, out = sweep(job["strategy"], grid, job["dataset"], _day(job.get("from")), _day(job.get("to")),
                     job.get("split") or None, base_params=base, cfg=cfg, workers=workers,
                     progress=progress or (lambda n, t: _status(job, progress=[n, t])), periods=fold_periods)
@@ -162,7 +180,6 @@ def run_optimise(job: dict, grid: dict, limit: int, cfg: dict | None = None, wor
     steadiness score, Conservative-fill and locked-away checks of the top picks."""
     import copy
     from .engine import backtest
-    from .feeds import load_dataset
     from .optimise import run
     from .runs import _clean
     from .strategy import load_strategies
@@ -202,10 +219,7 @@ def run_optimise(job: dict, grid: dict, limit: int, cfg: dict | None = None, wor
         return m
 
     def data_range():
-        idx = load_dataset(job["dataset"], _day(job.get("from")), _day(job.get("to"))).index
-        if not len(idx):
-            raise ValueError("No index prices in that range")
-        return idx[0].date(), idx[-1].date()
+        return data_span(job["dataset"], _day(job.get("from")), _day(job.get("to")))
 
     out = run(job, cfg, limit, run_sweep_, run_one_, data_range)
     scored, labels = out.pop("scored"), out.pop("labels")
@@ -230,8 +244,7 @@ def run_one(job: dict, store: Path | None = None, cfg: dict | None = None, publi
     strategies = load_strategies()
     if job.get("strategy") not in strategies:
         raise ValueError(f"No strategy called '{job.get('strategy')}'")
-    from .sec1_feed import SEC1_DATASET
-    if job.get("dataset") not in list_datasets() and job.get("dataset") != SEC1_DATASET:   # 1-second: data/sec1, not data/spot
+    if not known_dataset(job.get("dataset")):                # 1-second bars: data/sec1, not data/spot
         raise ValueError(f"No data set called '{job.get('dataset')}' on the server")
     start, end = _day(job.get("from")), _day(job.get("to"))
     if start and end and end < start:

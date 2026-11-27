@@ -114,4 +114,4 @@ Dated, newest first. One line each; link the pull request when there is one.
 - 2026-11-23 — A LIVE session stopped and resumed on the same day with nothing open starts a fresh cycle (Hamid).
 - 2026-11-23 — Positions page: trailing SL (by % or points from the best price) and SL / target as % of the average price (Hamid).
 - 2026-11-26 — Live: SL / target of each leg in the activity log (with trailing moves), on the position rows and as red / green lines on the P&L chart (Hamid).
-- 2026-11-28 — Run a backtest: 1-second bars offered and chosen by default, dates = the days that have them (Hamid).
+- 2026-11-28 — 1-second bars are the primary source for backtests and sweeps (Run, Sweep, Find best, Studio), dates = the days that have them; 1-minute stays as an option (Hamid).

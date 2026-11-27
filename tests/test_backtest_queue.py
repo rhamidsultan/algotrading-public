@@ -408,7 +408,9 @@ def test_run_page_offers_1_second_bars_first_with_their_days(tmp_path, monkeypat
     r = c.post("/api/backtest-runner", json=body)
     assert r.status_code == 200, r.get_json()
     assert r.get_json()["job"]["dataset"] == "NIFTY_1second"
-    assert c.post("/api/backtest-runner", json={**body, "kind": "sweep", "grid": {"lots": "1,2"}}).status_code == 400
+    r = c.post("/api/backtest-runner", json={**body, "kind": "sweep", "grid": {"lots": "1,2"}})   # sweeps too
+    assert r.status_code == 200 and r.get_json()["job"]["dataset"] == "NIFTY_1second", r.get_json()
+    assert "D.datasets.find(d => d.sec1) ||" in c.get("/backtests/sweep").get_data(as_text=True)    # sweep page: 1-second first
     page = c.get("/backtests/run").get_data(as_text=True)
     assert "D.datasets.find(d => d.sec1) ||" in page and "NIFTY 1-second" in page    # chosen first, labelled
 
@@ -427,3 +429,29 @@ def test_queue_runs_1_second_backtests(engine, monkeypatch):
     bq.process(tmp_path / "store", cfg=cfg)
     j = json.loads((tmp_path / "runtime" / "backtest-jobs" / "20261128-010000-sec1.json").read_text())
     assert seen["dataset"] == "NIFTY_1second" and "stepped on 1-second bars" in j["message"]   # not "No data set"
+
+
+def test_sweeps_and_walk_forward_use_the_1_second_days(engine, monkeypatch, tmp_path):
+    from datetime import date
+    from algolab import sec1
+    import algolab.sweep as sw
+    root = tmp_path / "sec1"
+    for day in ("2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23", "2026-11-27"):
+        (root / day).mkdir(parents=True)
+        (root / day / "NIFTY.csv").write_text("time\n")
+    monkeypatch.setattr(sec1, "ROOT", root)
+    assert bq.known_dataset("NIFTY_1second") and not bq.known_dataset("NIFTY_2second")
+    assert bq.data_span("NIFTY_1second", date(2026, 11, 5), None) == (date(2026, 11, 9), date(2026, 11, 27))
+    with pytest.raises(ValueError, match="No 1-second bars"):
+        bq.data_span("NIFTY_1second", date(2026, 12, 1), None)
+    seen = {}
+
+    def fake_sweep(strategy, grid, dataset, start, end, split=None, **k):
+        seen.update(dataset=dataset, periods=k.get("periods"))
+        raise ValueError("swept")
+    monkeypatch.setattr(sw, "sweep", fake_sweep)
+    with pytest.raises(ValueError, match="swept"):
+        bq.run_sweep({"strategy": "short_straddle", "dataset": "NIFTY_1second", "grid": {"lots": ["1", "2"]}, "folds": 3},
+                     cfg=engine[1])
+    assert seen["dataset"] == "NIFTY_1second"
+    assert seen["periods"]["f1"][0] == date(2026, 11, 2) and seen["periods"]["f3"][1] == date(2026, 11, 27)

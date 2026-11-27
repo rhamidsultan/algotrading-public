@@ -4425,8 +4425,6 @@ def api_backtest_runner():
         names = {d["name"] for d in _bt_datasets()}
         if b.get("dataset") not in names:
             return jsonify(error="Pick a data set."), 400
-        if b.get("dataset") == BT_SEC1 and b.get("kind") == "sweep":
-            return jsonify(error="Sweeps run on the 1-minute sets; pick NIFTY 1-minute."), 400
         start, end = (b.get("from") or "").strip(), (b.get("to") or "").strip()
         if (start and not _BT_DATE.match(start)) or (end and not _BT_DATE.match(end)) or (start and end and end < start):
             return jsonify(error="Dates must be YYYY-MM-DD, the end after the start."), 400
@@ -6761,7 +6759,6 @@ async function applyPreset(setVal, done) {
 const presetFor = name => PRESET && PRESET.strategy === name ? {id: PRESET.id} : null;
 function fill() {
   $("strategy").innerHTML = D.strategies.map(s => `<option value="${esc(s.name)}">${esc(s.title || s.name)}</option>`).join("");
-  if (SWEEP) D.datasets = D.datasets.filter(d => !d.sec1);           // sweeps run on the 1-minute sets
   $("dataset").innerHTML = D.datasets.map(d => `<option value="${esc(d.name)}">${d.sec1 ? `NIFTY 1-second · ${d.days.length} day${d.days.length === 1 ? "" : "s"}, ${dd(d.from)} – ${dd(d.to)}`
     : `${esc(d.name.replace("_minute", ""))} 1-minute${d.from ? ` · ${dd(d.from)} – ${dd(d.to)}` : ""}`}</option>`).join("");
   const want = new URLSearchParams(location.search).get("strategy");
@@ -7069,6 +7066,7 @@ details summary{cursor:pointer;color:var(--accent);margin-top:6px}
     <div class="muted">Tick <b>Vary</b> for each setting to test. Numbers and times take a range (from, to, step; times step in minutes); choices take a set. Every combination is backtested; with the out-of-sample check, you choose on the earlier period and see how it held up on the later one.</div>
     <label for="strategy">Strategy</label><select id="strategy"></select>
     <label for="dataset">Index prices</label><select id="dataset"></select>
+    <div class="muted" id="dsNote" style="margin-top:6px"></div>
     <div class="two">
       <div><label for="from">From</label><input type="date" id="from"></div>
       <div><label for="to">To</label><input type="date" id="to"></div>
@@ -7182,9 +7180,9 @@ async function applyPreset(setVal, done) {
 const presetFor = name => PRESET && PRESET.strategy === name ? {id: PRESET.id} : null;
 function fill() {
   $("strategy").innerHTML = D.strategies.map(s => `<option value="${esc(s.name)}">${esc(s.title || s.name)}</option>`).join("");
-  D.datasets = D.datasets.filter(d => !d.sec1);                     // sweeps run on the 1-minute sets
-  $("dataset").innerHTML = D.datasets.map(d => `<option value="${esc(d.name)}">${esc(d.name.replace("_minute", ""))} 1-minute${d.from ? ` · ${dd(d.from)} – ${dd(d.to)}` : ""}</option>`).join("");
-  const td = D.datasets.find(d => d.name === "NIFTY_minute"); if (td) $("dataset").value = td.name;
+  $("dataset").innerHTML = D.datasets.map(d => `<option value="${esc(d.name)}">${d.sec1 ? `NIFTY 1-second · ${d.days.length} day${d.days.length === 1 ? "" : "s"}, ${dd(d.from)} – ${dd(d.to)}`
+    : `${esc(d.name.replace("_minute", ""))} 1-minute${d.from ? ` · ${dd(d.from)} – ${dd(d.to)}` : ""}`}</option>`).join("");
+  const td = D.datasets.find(d => d.sec1) || D.datasets.find(d => d.name === "NIFTY_minute"); if (td) $("dataset").value = td.name;   // 1-second first
   const want = new URLSearchParams(location.search).get("strategy");
   if (want && D.strategies.some(s => s.name === want)) $("strategy").value = want;
   strat(); range();
@@ -7308,7 +7306,10 @@ function count() {
 function range() {
   const d = D.datasets.find(x => x.name === $("dataset").value); if (!d) return;
   for (const id of ["from", "to", "split"]) { $(id).min = d.from || ""; $(id).max = d.to || ""; }
-  if (d.to) { $("to").value = d.to; const f = d.to.replace(/^\d{4}/, n => String(+n - 1)); $("from").value = d.from && f < d.from ? d.from : f; }
+  if (d.sec1) { $("from").value = d.from; $("to").value = d.to; }          // every day of 1-second bars kept
+  else if (d.to) { $("to").value = d.to; const f = d.to.replace(/^\d{4}/, n => String(+n - 1)); $("from").value = d.from && f < d.from ? d.from : f; }
+  if ($("dsNote")) $("dsNote").textContent = d.sec1 ? `Steps every second, fills at that second's bid / ask (as paper). Days: ${d.days.map(dd).join(", ")}. `
+    + `Walk-forward needs at least 1 week per period and Find best settings about 2 months, so with ${d.days.length} day${d.days.length === 1 ? "" : "s"} a plain sweep or an out-of-sample date fits best.` : "";
   splitDefault();
 }
 function splitDefault() {
