@@ -4268,9 +4268,22 @@ BT_SWEEP_MAX_MAC = 400     # and on the Mac (faster, several at once)
 _BT_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+BT_SEC1 = "NIFTY_1second"   # algolab/sec1_feed.SEC1_DATASET: step every second on the recorded 1-second bars
+
+
+def _bt_sec1_days():
+    """Days of 1-second bars a backtest can use: those with the index file (as algolab/sec1_feed.sec1_days)."""
+    root = DATA / "sec1"
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.name) and (p / "NIFTY.csv").exists())
+
+
 def _bt_datasets():
-    """The price sets a backtest can be asked to use: one 1-minute set per index (algolab/datasets.py)."""
-    out = []
+    """The price sets a backtest can be asked to use: NIFTY 1-second bars (the days kept, when there are any),
+    then one 1-minute set per index (algolab/datasets.py)."""
+    days = _bt_sec1_days()
+    out = [{"name": BT_SEC1, "from": days[0], "to": days[-1], "days": days, "sec1": True}] if days else []
     for f in sorted((ENGINE / "data" / "spot").glob("*.csv")):
         if not _SET_RE.fullmatch(f.stem):
             continue
@@ -4412,6 +4425,8 @@ def api_backtest_runner():
         names = {d["name"] for d in _bt_datasets()}
         if b.get("dataset") not in names:
             return jsonify(error="Pick a data set."), 400
+        if b.get("dataset") == BT_SEC1 and b.get("kind") == "sweep":
+            return jsonify(error="Sweeps run on the 1-minute sets; pick NIFTY 1-minute."), 400
         start, end = (b.get("from") or "").strip(), (b.get("to") or "").strip()
         if (start and not _BT_DATE.match(start)) or (end and not _BT_DATE.match(end)) or (start and end and end < start):
             return jsonify(error="Dates must be YYYY-MM-DD, the end after the start."), 400
@@ -6746,11 +6761,12 @@ async function applyPreset(setVal, done) {
 const presetFor = name => PRESET && PRESET.strategy === name ? {id: PRESET.id} : null;
 function fill() {
   $("strategy").innerHTML = D.strategies.map(s => `<option value="${esc(s.name)}">${esc(s.title || s.name)}</option>`).join("");
-  $("dataset").innerHTML = D.datasets.map(d => `<option value="${esc(d.name)}">${esc(d.name.replace("_minute", ""))} 1-minute${d.from ? ` · ${dd(d.from)} – ${dd(d.to)}` : ""}</option>`).join("");
-  if ($("sec1Note")) { const s1 = (D.sec1 || {}).days || []; $("sec1Note").textContent = s1.length ? `1-second bars: ${s1.length} day${s1.length === 1 ? "" : "s"} (${dd(s1[0])} – ${dd(s1[s1.length - 1])}), for Compare with paper` : "1-second bars: none recorded yet"; }
+  if (SWEEP) D.datasets = D.datasets.filter(d => !d.sec1);           // sweeps run on the 1-minute sets
+  $("dataset").innerHTML = D.datasets.map(d => `<option value="${esc(d.name)}">${d.sec1 ? `NIFTY 1-second · ${d.days.length} day${d.days.length === 1 ? "" : "s"}, ${dd(d.from)} – ${dd(d.to)}`
+    : `${esc(d.name.replace("_minute", ""))} 1-minute${d.from ? ` · ${dd(d.from)} – ${dd(d.to)}` : ""}`}</option>`).join("");
   const want = new URLSearchParams(location.search).get("strategy");
   if (want && D.strategies.some(s => s.name === want)) $("strategy").value = want;
-  const td = D.datasets.find(d => d.name === "NIFTY_minute"); if (td) $("dataset").value = td.name;
+  const td = D.datasets.find(d => d.sec1) || D.datasets.find(d => d.name === "NIFTY_minute"); if (td) $("dataset").value = td.name;   // 1-second first
   strat(); range();
   applyPreset((k, v) => { const el = $("p_" + k); if (!el) return; if (el.type === "checkbox") el.checked = !!v; else el.value = v; });
   if (!D.may_run) { $("run").disabled = true; $("err").textContent = "This login may look at backtests but not run them."; }
@@ -6826,6 +6842,10 @@ function count() {
 function range() {
   const d = D.datasets.find(x => x.name === $("dataset").value); if (!d) return;
   $("from").min = $("to").min = d.from || ""; $("from").max = $("to").max = d.to || "";
+  if (d.sec1) { $("from").value = d.from; $("to").value = d.to;              // every day of 1-second bars kept
+    $("sec1Note").textContent = `Steps every second, fills at that second's bid / ask (as paper). Days with 1-second bars: ${d.days.map(dd).join(", ")}; other days in the range are left out.`;
+    return; }
+  if ($("sec1Note")) { const s1 = (D.sec1 || {}).days || []; $("sec1Note").textContent = s1.length ? `1-second bars: ${s1.length} day${s1.length === 1 ? "" : "s"} (${dd(s1[0])} – ${dd(s1[s1.length - 1])})` : "1-second bars: none recorded yet"; }
   if (d.to) { $("to").value = d.to;
     const f = d.to.replace(/^\d{4}/, n => String(+n - 1)); $("from").value = d.from && f < d.from ? d.from : f; }
 }
@@ -7162,6 +7182,7 @@ async function applyPreset(setVal, done) {
 const presetFor = name => PRESET && PRESET.strategy === name ? {id: PRESET.id} : null;
 function fill() {
   $("strategy").innerHTML = D.strategies.map(s => `<option value="${esc(s.name)}">${esc(s.title || s.name)}</option>`).join("");
+  D.datasets = D.datasets.filter(d => !d.sec1);                     // sweeps run on the 1-minute sets
   $("dataset").innerHTML = D.datasets.map(d => `<option value="${esc(d.name)}">${esc(d.name.replace("_minute", ""))} 1-minute${d.from ? ` · ${dd(d.from)} – ${dd(d.to)}` : ""}</option>`).join("");
   const td = D.datasets.find(d => d.name === "NIFTY_minute"); if (td) $("dataset").value = td.name;
   const want = new URLSearchParams(location.search).get("strategy");

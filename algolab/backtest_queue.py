@@ -230,7 +230,8 @@ def run_one(job: dict, store: Path | None = None, cfg: dict | None = None, publi
     strategies = load_strategies()
     if job.get("strategy") not in strategies:
         raise ValueError(f"No strategy called '{job.get('strategy')}'")
-    if job.get("dataset") not in list_datasets():
+    from .sec1_feed import SEC1_DATASET
+    if job.get("dataset") not in list_datasets() and job.get("dataset") != SEC1_DATASET:   # 1-second: data/sec1, not data/spot
         raise ValueError(f"No data set called '{job.get('dataset')}' on the server")
     start, end = _day(job.get("from")), _day(job.get("to"))
     if start and end and end < start:

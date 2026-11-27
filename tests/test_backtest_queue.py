@@ -392,3 +392,38 @@ def test_results_list_finished_jobs_and_delete(tmp_path, monkeypatch):
     run = c.get("/backtests/run").get_data(as_text=True)
     assert "In progress" in run and "Finished backtests are in" in run
     assert "Finished sweeps are in" in c.get("/backtests/sweep").get_data(as_text=True)
+
+
+def test_run_page_offers_1_second_bars_first_with_their_days(tmp_path, monkeypatch):
+    mod, c = _panel(tmp_path, monkeypatch)
+    for day in ("2026-11-24", "2026-11-26", "2026-11-27"):
+        (tmp_path / "data" / "sec1" / day).mkdir(parents=True)
+        (tmp_path / "data" / "sec1" / day / "NIFTY.csv").write_text("time\n")
+    (tmp_path / "data" / "sec1" / "2026-11-25").mkdir()            # no index file: not usable, not offered
+    d = c.get("/api/backtest-runner").get_json()
+    assert d["datasets"][0] == {"name": "NIFTY_1second", "from": "2026-11-24", "to": "2026-11-27", "sec1": True,
+                                "days": ["2026-11-24", "2026-11-26", "2026-11-27"]}
+    assert d["datasets"][1]["name"] == "NIFTY_minute"
+    body = {"strategy": "expiry_doubler", "dataset": "NIFTY_1second", "from": "2026-11-24", "to": "2026-11-27"}
+    r = c.post("/api/backtest-runner", json=body)
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["job"]["dataset"] == "NIFTY_1second"
+    assert c.post("/api/backtest-runner", json={**body, "kind": "sweep", "grid": {"lots": "1,2"}}).status_code == 400
+    page = c.get("/backtests/run").get_data(as_text=True)
+    assert "D.datasets.find(d => d.sec1) ||" in page and "NIFTY 1-second" in page    # chosen first, labelled
+
+
+def test_queue_runs_1_second_backtests(engine, monkeypatch):
+    tmp_path, cfg = engine
+    import algolab.engine as eng
+    seen = {}
+
+    def fake(cfg, strat, dataset, start, end, *a, **k):
+        seen["dataset"] = dataset
+        raise ValueError("stepped on 1-second bars")
+    monkeypatch.setattr(eng, "backtest", fake)
+    _queue(tmp_path, "20261128-010000-sec1", strategy="short_straddle", dataset="NIFTY_1second",
+           **{"from": "2026-11-24", "to": "2026-11-27"})
+    bq.process(tmp_path / "store", cfg=cfg)
+    j = json.loads((tmp_path / "runtime" / "backtest-jobs" / "20261128-010000-sec1.json").read_text())
+    assert seen["dataset"] == "NIFTY_1second" and "stepped on 1-second bars" in j["message"]   # not "No data set"
