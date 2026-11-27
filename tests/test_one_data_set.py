@@ -51,7 +51,7 @@ def test_screens_offer_only_the_index_sets(tmp_path, monkeypatch):
     (day / "NIFTY.csv").write_text("time\n")
     mod = _panel(tmp_path, monkeypatch)
     assert [f.stem for f in mod._spot_files()] == ["NIFTY_minute", "SENSEX_minute"]
-    assert [d["name"] for d in mod._bt_datasets()] == ["NIFTY_minute", "SENSEX_minute"]
+    assert [d["name"] for d in mod._bt_datasets()] == ["NIFTY_1second", "NIFTY_minute", "SENSEX_minute"]   # 1-second first
     assert mod._sec1_days() == [{"day": "2026-10-27", "instruments": 1, "mb": 0.0,
                                  "coverage": 0.0, "gaps": [["09:15", "15:30"]]}]     # an empty file: no ticks all day
     assert datasets.screen_datasets(spot) == ["NIFTY_minute", "SENSEX_minute"]
