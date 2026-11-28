@@ -113,6 +113,11 @@ details.sec>summary{list-style:none;cursor:pointer;display:flex;align-items:cent
 details.sec>summary::-webkit-details-marker{display:none}
 details.sec>summary .chev{display:inline-flex;margin-left:auto;color:var(--muted);transition:transform .2s}
 details.sec[open]>summary .chev{transform:rotate(90deg)}
+details.sec[open]>summary{margin-bottom:8px}
+.pick{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pick label{font-size:13px;text-transform:uppercase;letter-spacing:.04em;font-weight:650}
+.pick select{font:inherit;font-size:15px;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);min-width:220px;max-width:100%}
+.pick .sub{font-size:12px;color:var(--muted)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:8px 0 0;color:var(--muted)}
 input[type=checkbox]{width:24px;height:24px;accent-color:var(--accent);cursor:pointer;margin:0}
@@ -138,16 +143,19 @@ input[type=checkbox]{width:24px;height:24px;accent-color:var(--accent);cursor:po
   </div>
 
   <div id="main" class="hide">
-    <div class="card" style="margin-top:0">
-      <h2 class="t"><span id="runsIc"></span>Runs <span class="cnt" id="runCnt"></span></h2>
+    <div class="card pick" style="margin-top:0">
+      <label for="stratSel">Strategy</label><select id="stratSel"></select><span class="sub" id="stratSub"></span>
+    </div>
+    <details class="card sec" data-k="runs" open>
+      <summary><h2 class="t"><span id="runsIc"></span>Runs <span class="cnt" id="runCnt"></span></h2><span class="chev"></span></summary>
       <div class="hint"><span id="cmpIc"></span>tick up to 3 to compare</div>
       <div class="rl" id="runs"></div>
-    </div>
-    <div class="card hide" id="swCard">
-      <h2 class="t">Sweeps <span class="cnt" id="swCnt"></span></h2>
+    </details>
+    <details class="card sec hide" id="swCard" data-k="sweeps" open>
+      <summary><h2 class="t">Sweeps <span class="cnt" id="swCnt"></span></h2><span class="chev"></span></summary>
       <div class="hint">Sweeps, Find best settings and backtests that did not finish. Tap one to open it.</div>
       <div id="sweeps"></div>
-    </div>
+    </details>
 
     <div class="banner hide" id="banner"></div>
 
@@ -169,41 +177,42 @@ input[type=checkbox]{width:24px;height:24px;accent-color:var(--accent);cursor:po
         <div class="chips" id="chips"></div>
       </div>
 
-      <div class="card">
+      <details class="card sec" data-k="chart" open>
+        <summary><h2 class="t">P&amp;L and drawdown</h2><span class="chev"></span></summary>
         <div class="legend" id="legend"></div>
         <div class="chartbox"><canvas id="pnl"></canvas></div>
         <div class="sub2" id="ddTitle" title="Fall from the highest P&amp;L so far, using each day's lowest value">▼ Drawdown</div>
         <div class="chartbox small"><canvas id="dd"></canvas></div>
         <div class="note" id="chartNote"></div>
-      </div>
+      </details>
 
-      <div class="card">
-        <h2 class="t">Calendar <span class="cnt" id="calCnt"></span></h2>
+      <details class="card sec" data-k="calendar" open>
+        <summary><h2 class="t">Calendar <span class="cnt" id="calCnt"></span></h2><span class="chev"></span></summary>
         <div class="calbar" id="calYears"></div>
         <div class="months" id="calMonths"></div>
         <div class="dayx" id="calDay"></div>
         <div class="note">Each square is a trading day, coloured by that day's P&amp;L after charges. Tap one for its cycles.</div>
-      </div>
+      </details>
 
-      <div class="card">
-        <h2 class="t">Breakdown</h2>
+      <details class="card sec" data-k="breakdown" open>
+        <summary><h2 class="t">Breakdown</h2><span class="chev"></span></summary>
         <div class="calbar" id="bdBy"><button type="button" data-b="year" class="on">Year</button><button type="button" data-b="month">Month</button><button type="button" data-b="weekday">Weekday</button><button type="button" data-b="reason">Exit reason</button></div>
         <div class="scroll"><table id="bd"></table></div>
         <div class="note">Cycles grouped by when they closed (weekday: when they opened). Net after charges.</div>
-      </div>
+      </details>
 
-      <div class="card">
-        <h2 class="t"><span id="cycIc"></span>Cycles <span class="cnt" id="cycCnt"></span></h2>
+      <details class="card sec" data-k="cycles" open>
+        <summary><h2 class="t"><span id="cycIc"></span>Cycles <span class="cnt" id="cycCnt"></span></h2><span class="chev"></span></summary>
         <div class="cl" id="cycles"></div>
         <div id="legsBox" class="hide"><div class="sub2">Legs</div><div class="scroll"><table>
           <thead><tr><th class="l">Cycle</th><th class="l">Contract</th><th class="l">Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net</th><th class="l">Reason</th></tr></thead>
           <tbody id="legs"></tbody></table></div></div>
         <div id="logBox" class="hide"><div class="sub2">Strategy log (last 400 lines)</div><pre id="log"></pre></div>
-      </div>
+      </details>
 
       <div class="grid2">
-        <details class="card sec"><summary><h2 class="t"><span id="setIc"></span>Settings</h2><span class="chev"></span></summary><dl id="params"></dl><div class="note" id="runInfo"></div></details>
-        <details class="card sec"><summary><h2 class="t"><span id="figIc"></span>All figures</h2><span class="chev"></span></summary><dl id="metrics"></dl></details>
+        <details class="card sec" data-k="settings"><summary><h2 class="t"><span id="setIc"></span>Settings</h2><span class="chev"></span></summary><dl id="params"></dl><div class="note" id="runInfo"></div></details>
+        <details class="card sec" data-k="figures"><summary><h2 class="t"><span id="figIc"></span>All figures</h2><span class="chev"></span></summary><dl id="metrics"></dl></details>
       </div>
     </div>
   </div>
@@ -215,7 +224,11 @@ const TITLES = {short_straddle: "Positional straddle", intraday_straddle: "Intra
   put_credit_spread: "Put credit spread", blaze_butterfly: "Blaze butterfly", straddle_trend_switch: "Straddle grid trend"};
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const SERIES = ["--s1", "--s2", "--s3"];
-let runs = [], current = null, compare = [], cache = {}, charts = {};
+let runs = [], current = null, compare = [], cache = {}, charts = {}, sweepJobs = [], strat = null;
+// the strategy picked at the top: only its runs and sweeps are listed ("" = all strategies); remembered per browser
+const store = {get(k) { try { return localStorage.getItem("bt." + k); } catch (e) { return null; } },
+               set(k, v) { try { localStorage.setItem("bt." + k, v); } catch (e) {} }};
+const shown = () => runs.filter(r => !strat || r.strategy === strat);
 const $ = id => document.getElementById(id);
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -270,6 +283,15 @@ for (const [id, k, tl] of [["macIc", "mac", "Backtests run on the Mac"], ["runsI
                            ["btnLegs", "legs", "Show legs"], ["btnLog", "log", "Show log"], ["btnDelete", "trash", "Delete run"], ["setIc", "set", "Settings"], ["figIc", "fig", "All figures"]])
   $(id).innerHTML = icon(k, tl);
 document.querySelectorAll("details.sec .chev").forEach(c => c.innerHTML = icon("chev", "Show or hide"));
+// every section opens and closes; how it was left is remembered per browser
+document.querySelectorAll("details.sec[data-k]").forEach(d => {
+  const was = store.get("open." + d.dataset.k);
+  if (was !== null) d.open = was === "1";
+  d.addEventListener("toggle", () => {
+    store.set("open." + d.dataset.k, d.open ? "1" : "0");
+    if (d.open && d.dataset.k === "chart" && current) drawCharts();
+  });
+});
 
 async function getJSON(url, opt) {
   const r = await fetch(url, Object.assign({credentials: "same-origin"}, opt || {}));
@@ -283,9 +305,14 @@ const KIND = j => j.optimise ? "Find best settings" : j.kind === "sweep" ? (j.fo
 async function loadSweeps() {
   let j;
   try { j = await getJSON("/api/backtest-runner/finished"); } catch (e) { return; }
-  const list = j.jobs || [];
+  sweepJobs = j.jobs || [];
+  if (sweepJobs.length) { $("main").classList.remove("hide"); $("emptyBox").classList.add("hide"); }
+  fillStrats();
+  renderSweeps();
+}
+function renderSweeps() {
+  const list = sweepJobs.filter(x => !strat || x.strategy === strat);
   $("swCard").classList.toggle("hide", !list.length);
-  if (list.length) { $("main").classList.remove("hide"); $("emptyBox").classList.add("hide"); }
   $("swCnt").textContent = list.length || "";
   $("sweeps").innerHTML = list.map(x => {
     const best = x.best, failed = x.status === "failed";
@@ -317,15 +344,50 @@ async function loadList(selectName) {
   $("emptyBox").classList.toggle("hide", runs.length > 0);
   $("main").classList.toggle("hide", runs.length === 0);
   compare = compare.filter(n => runs.some(r => r.name === n));
-  renderList();
-  if (!runs.length) return;
-  const want = selectName || new URLSearchParams(location.search).get("run");
-  await select(runs.some(r => r.name === want) ? want : runs[0].name);
+  const q = new URLSearchParams(location.search), want = selectName || q.get("run"), wanted = runs.find(r => r.name === want);
+  if (strat === null) {          // first load: the run asked for, then ?strategy=, then the last one picked, then the newest run's
+    const saved = q.get("strategy") ?? store.get("strategy");
+    strat = wanted ? wanted.strategy : saved !== null && (saved === "" || runs.some(r => r.strategy === saved) || sweepJobs.some(x => x.strategy === saved)) ? saved : (runs[0] || {}).strategy || "";
+  } else if (wanted && strat && wanted.strategy !== strat) strat = wanted.strategy;
+  fillStrats();
+  await showStrategy(wanted && shown().includes(wanted) ? wanted.name : null);
 }
+
+function fillStrats() {
+  if (strat === null) return;
+  const count = {};
+  for (const r of runs) count[r.strategy] = (count[r.strategy] || 0) + 1;
+  for (const x of sweepJobs) if (!(x.strategy in count)) count[x.strategy] = 0;
+  if (strat && !(strat in count)) count[strat] = 0;
+  const names = Object.keys(count).filter(Boolean).sort((a, b) => title(a).localeCompare(title(b)));
+  $("stratSel").innerHTML = `<option value="">All strategies (${runs.length})</option>` +
+    names.map(n => `<option value="${esc(n)}">${esc(title(n))} (${count[n]} run${count[n] === 1 ? "" : "s"})</option>`).join("");
+  $("stratSel").value = strat;
+}
+
+async function showStrategy(name) {
+  const list = shown();
+  compare = compare.filter(n => list.some(r => r.name === n));
+  $("stratSub").textContent = strat ? `${list.length} saved run${list.length === 1 ? "" : "s"}` : "";
+  renderSweeps();
+  $("detail").classList.toggle("hide", !list.length);
+  if (!list.length) {
+    current = null; renderList();
+    $("runs").innerHTML = `<div class="hint">No saved runs for ${esc(title(strat))} yet. Run one in Algo Lab › Run a backtest.</div>`;
+    history.replaceState(null, "", "/backtests?strategy=" + encodeURIComponent(strat));
+    return;
+  }
+  await select(name || (current && list.some(r => r.name === current.name) ? current.name : list[0].name));
+}
+$("stratSel").addEventListener("change", async () => {
+  strat = $("stratSel").value; store.set("strategy", strat);
+  await showStrategy(null);
+});
 
 function renderList() {
   const hd = `<div class="rr hd"><span></span><span>Strategy</span><span class="w">Period</span><span>Net</span><span class="w">Ret / DD</span><span class="w">Worst week</span><span>Cycles</span><span></span></div>`;
-  $("runs").innerHTML = hd + runs.map(r => {
+  $("runCnt").textContent = shown().length || "";
+  $("runs").innerHTML = hd + shown().map(r => {
     const m = r.metrics || {}, sample = String(r.dataset || "").startsWith("SAMPLE");
     return `<div class="rr${current && current.name === r.name ? " sel" : ""}" data-name="${esc(r.name)}">
       <span><input type="checkbox" aria-label="Compare" title="Compare" ${compare.includes(r.name) ? "checked" : ""} data-cmp="${esc(r.name)}"></span>
@@ -385,7 +447,7 @@ async function fetchRun(name) {
 
 async function select(name) {
   current = await fetchRun(name);
-  history.replaceState(null, "", "/backtests?run=" + encodeURIComponent(name));
+  history.replaceState(null, "", "/backtests?run=" + encodeURIComponent(name) + (strat ? "&strategy=" + encodeURIComponent(strat) : ""));
   renderList();
   renderDetail();
   await drawCharts();

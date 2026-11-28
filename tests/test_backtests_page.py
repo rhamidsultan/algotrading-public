@@ -53,3 +53,14 @@ def test_each_cycle_opens_to_its_trades(tmp_path, monkeypatch):
     assert isinstance(j["trades"][0]["entry_price"], float) and isinstance(j["fills"][0]["time"], str)
     html = (TPL / "backtests.html").read_text()
     assert "toggleCycle" in html and "?cycle=" in html and 'role="button"' in html
+
+
+def test_results_are_picked_by_strategy_in_sections_that_fold():
+    """Results: a strategy picker at the top lists only that strategy's runs and sweeps; every section folds and
+    is remembered (checked in a browser with sample runs of two strategies)."""
+    html = (TPL / "backtests.html").read_text()
+    assert 'id="stratSel"' in html and "All strategies" in html and "?strategy=" in html
+    assert "const shown = () => runs.filter(r => !strat || r.strategy === strat)" in html
+    folds = re.findall(r'<details class="card sec[^"]*"[^>]*data-k="(\w+)"', html)
+    assert folds == ["runs", "sweeps", "chart", "calendar", "breakdown", "cycles", "settings", "figures"]
+    assert 'store.set("open." + d.dataset.k' in html
