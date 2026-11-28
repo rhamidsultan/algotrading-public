@@ -44,7 +44,13 @@ def _write(path: Path, data: dict) -> None:
 
 
 def _status(job: dict, **changes) -> dict:
+    """Write a job's state; also when it last reported and where this step's progress began (the page's time left)."""
     job.update(changes)
+    now = datetime.now().isoformat(timespec="seconds")
+    job["updated"] = now
+    p = changes.get("progress")
+    if isinstance(p, list) and len(p) == 2 and (job.get("p0") or {}).get("step") != job.get("step"):
+        job["p0"] = {"step": job.get("step"), "at": now, "n": p[0]}
     JOBS.mkdir(parents=True, exist_ok=True)
     _write(JOBS / f"{job['id']}.json", job)
     return job
@@ -151,7 +157,7 @@ def run_sweep(job: dict, cfg: dict | None = None, workers: int = 1, progress=Non
         fold_periods = folds(*data_span(job["dataset"], _day(job.get("from")), _day(job.get("to"))), n_folds)
     df, out = sweep(job["strategy"], grid, job["dataset"], _day(job.get("from")), _day(job.get("to")),
                     job.get("split") or None, base_params=base, cfg=cfg, workers=workers,
-                    progress=progress or (lambda n, t: _status(job, progress=[n, t])), periods=fold_periods)
+                    progress=progress or (lambda n, t: _status(job, progress=[n, t], step="combo")), periods=fold_periods)
     per = list(fold_periods) if fold_periods else ["in", "out"] if job.get("split") else ["all"]
     for m in METRICS:
         col = f"{per[0]}_{m}"
@@ -191,7 +197,7 @@ def run_optimise(job: dict, grid: dict, limit: int, cfg: dict | None = None, wor
     done = [0]
     budget = limit + 6                    # the sweep, then up to 3 picks x 2 checks
 
-    report = progress or (lambda n, t: _status(job, progress=[n, t]))
+    report = progress or (lambda n, t: _status(job, progress=[n, t], step="combo"))
 
     def tick(_n=None, _t=None):
         done[0] += 1
@@ -316,7 +322,7 @@ def run_compare_period(job: dict, cfg: dict | None = None) -> dict:
     if not start or not end:
         raise ValueError("Pick the first and last day.")
     rep = dc.run(start, end, job.get("bars") or ["1m", "1s"], job.get("sessions") or None, cfg or load_config(),
-                 job_id=job["id"], log=lambda m: None, progress=lambda n, t, sid: _status(job, progress=[n, t], message=sid))
+                 job_id=job["id"], log=lambda m: None, progress=lambda n, t, sid: _status(job, progress=[n, t], step="session", message=sid))
     ok = [r for r in rep["sessions"] if "error" not in r]
     p, lv = rep["totals"]["paper"], rep["totals"]["live"]
     bits = [f"{len(ok)} session(s)"]

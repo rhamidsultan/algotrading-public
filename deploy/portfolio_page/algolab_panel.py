@@ -4311,7 +4311,55 @@ def _bt_jobs(n=15, light=True):
             if light and isinstance(j.get("rows"), list) and len(j["rows"]) > 10:
                 j = {**j, "rows": j["rows"][:10], "rows_total": len(j["rows"])}
             jobs.append(j)
+    return _job_clock(jobs)
+
+
+_BT_STEP = {"sync": "copying prices", "day": "day", "combo": "combination", "session": "session"}
+
+
+def _secs(a, b):
+    try:
+        return max(0, int((b - _dt.fromisoformat(str(a))).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _job_clock(jobs, now=None):
+    """What the Run and Sweep pages show to tell slow from stuck: for a running job how long it has run
+    (elapsed_s), how long since it last reported (since_update_s; Mac jobs report through the helper) and, from
+    its pace since this step's first report, about how long is left (eta_s); for a waiting job, what it waits behind."""
+    now = now or _dt.now()
+    busy = {}
+    for j in sorted(jobs, key=lambda x: str(x.get("started") or "")):
+        if j.get("status") != "running":
+            continue
+        j["elapsed_s"] = _secs(j.get("started"), now)
+        j["since_update_s"] = _secs(j.get("updated") or j.get("started"), now)
+        p, p0 = j.get("progress"), j.get("p0") or {}
+        if isinstance(p, list) and len(p) == 2 and p0.get("at") and p0.get("step") == j.get("step"):
+            done, spent = p[0] - p0.get("n", 0), _secs(p0["at"], _dt.fromisoformat(str(j.get("updated") or now.isoformat())))
+            if done > 0 and spent is not None and p[1] > p[0]:
+                j["eta_s"] = int(spent / done * (p[1] - p[0]))
+        what = {"sweep": "a sweep", "compare_period": "Compare with paper"}.get(j.get("kind"), "a backtest")
+        name = j.get("title") or j.get("strategy") or ""
+        busy.setdefault(j.get("target") or "server",
+                        f"{what}{' (' + name + ')' if name and j.get('kind') != 'compare_period' else ''}"
+                        + (f", {_BT_STEP.get(j.get('step'), 'step')} {p[0]} of {p[1]}" if isinstance(p, list) and len(p) == 2 else ""))
+    for j in jobs:
+        if j.get("status") == "queued" and busy.get(j.get("target") or "server"):
+            j["behind"] = busy[j.get("target") or "server"]
     return jobs
+
+
+def _job_stamp(job: dict, changes: dict):
+    """Note when a job last reported, and where its current step's progress started (for the time left)."""
+    now = _dt.now().isoformat(timespec="seconds")
+    job["updated"] = now
+    p = changes.get("progress")
+    if isinstance(p, list) and len(p) == 2:
+        step = changes.get("step", job.get("step"))
+        if (job.get("p0") or {}).get("step") != step:
+            job["p0"] = {"step": step, "at": now, "n": p[0]}
 
 
 @panel.route("/api/td-live-test", methods=["GET", "POST"])
@@ -4735,7 +4783,9 @@ def api_lab_agent_status():
     job = _json(BT_JOBS / f"{jid}.json") if re.fullmatch(r"[0-9]{8}-[0-9]{6}-[a-z0-9]{4}", jid) else None
     if not job or job.get("target") != "mac":
         return jsonify(error="No such Mac job."), 404
-    job.update({k: v for k, v in b.items() if k in _BT_FIELDS})
+    changes = {k: v for k, v in b.items() if k in _BT_FIELDS}
+    job.update(changes)
+    _job_stamp(job, changes)
     if job.get("status") in ("done", "failed"):
         job["finished"] = _dt.now().isoformat(timespec="seconds")
     _job_write(job)
@@ -6625,6 +6675,28 @@ except Exception as _e:  # noqa: BLE001 - without it the dashboard keeps its sin
     print(f"Logins and access (users_panel) not loaded: {_e}")
 
 
+JOB_PROGRESS_JS = r"""
+function jobDur(sec) { sec = Math.round(sec || 0); if (sec < 60) return sec + " s"; const m = Math.round(sec / 60); if (m < 60) return m + " min";
+  const h = Math.floor(m / 60), r = m % 60; return h + " h" + (r ? " " + r + " min" : ""); }
+// one line that tells slow from stuck: stage, N of M, time running, time left, last report
+function jobProgress(j) {
+  if (j.status === "queued") return j.behind ? ` · waits behind ${esc(j.behind)}` : (j.target === "mac" ? "" : " · starts in a moment");
+  if (j.status !== "running") return "";
+  const p = Array.isArray(j.progress) && j.progress.length === 2 ? j.progress : null;
+  const word = {day: "day", combo: "combination", session: "session"}[j.step] || (j.kind === "sweep" ? "combination" : j.kind === "compare_period" ? "session" : "step");
+  const syncing = j.step === "sync" && !p;      // a helper that started before this code keeps "sync" while it counts
+  let s = syncing ? " · copying new prices from the server (first time with 1-second bars: up to 15 min)"
+    : p ? ` · ${word} ${p[0]} of ${p[1]}` : " · started";
+  if (j.elapsed_s != null) s += ` · running ${jobDur(j.elapsed_s)}`;
+  if (j.eta_s != null && !syncing) s += ` · about ${jobDur(j.eta_s)} left`;
+  const quiet = j.since_update_s, limit = p ? 900 : 2400;
+  if (quiet != null && quiet > limit) s += ` · <span class="down">no update for ${jobDur(quiet)}: may be stuck</span>`;
+  else if (quiet != null && j.elapsed_s > 20) s += ` · last update ${jobDur(quiet)} ago`;
+  if (p && p[1] > 0 && !syncing) s += `<div style="height:4px;background:var(--line);border-radius:2px;margin-top:5px;max-width:360px"><div style="width:${Math.min(100, Math.round(p[0] / p[1] * 100))}%;height:4px;background:var(--accent);border-radius:2px"></div></div>`;
+  return s;
+}
+"""
+
 RUN_PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -6885,8 +6957,7 @@ async function run(extra) {
 }
 function sweepJob(j) {
   const keys = Object.keys(j.grid || {}), st = j.status;
-  const prog = j.progress ? ` · ${j.progress[0]} of ${j.progress[1]}` : "";
-  const head = `<div class="t"><a href="/backtests/sweep?job=${encodeURIComponent(j.id)}" style="color:inherit">Sweep · ${esc(j.title || j.strategy)}</a></div><div class="muted">${j.target === "mac" ? "Mac" : "Server"} · ${esc(j.dataset)} · ${dd(j.from)} – ${j.to ? dd(j.to) : "latest"} · ${keys.map(esc).join(" × ")}${st === "running" ? prog : ""}</div>`;
+  const head = `<div class="t"><a href="/backtests/sweep?job=${encodeURIComponent(j.id)}" style="color:inherit">Sweep · ${esc(j.title || j.strategy)}</a></div><div class="muted">${j.target === "mac" ? "Mac" : "Server"} · ${esc(j.dataset)} · ${dd(j.from)} – ${j.to ? dd(j.to) : "latest"} · ${keys.map(esc).join(" × ")}${jobProgress(j)}</div>`;
   let body = st === "failed" ? `<div class="down" style="font-size:13px">${esc(j.message)}</div>` : "";
   if (st === "done" && (j.rows || []).length) {
     body = `<div style="overflow-x:auto;margin-top:6px"><table class="sw"><tr>${keys.map(k => `<th>${esc(k)}</th>`).join("")}<th>Net</th><th>Ret/DD</th><th>Wins</th><th></th></tr>` +
@@ -6931,7 +7002,7 @@ function jobs() {
         <span class="down" title="Max drawdown">${m["Max drawdown"] != null ? "↓ " + inr(m["Max drawdown"]) : ""}</span></div>`
       : j.status === "failed" ? `<div class="down" style="font-size:13px">${esc(j.message)}</div>` : "";
     if (j.kind === "sweep") return sweepJob(j);
-    const head = `<div class="t">${esc(j.title || j.strategy)}</div><div class="muted">${j.target === "mac" ? "Mac" : "Server"} · ${esc(j.dataset)} · ${dd(j.from)} – ${j.to ? dd(j.to) : "latest"}${j.note ? " · " + esc(j.note) : ""}${j.target === "mac" && j.status === "queued" && !(D.mac || {}).online ? " · waits for the Mac" : ""}${j.status === "running" && j.step === "sync" ? " · copying new prices from the server (the first time with 1-second bars this can take 15 minutes)" : ""}${j.status === "running" && j.step === "day" && j.progress ? ` · day ${j.progress[0]} of ${j.progress[1]}` : ""}${j.target === "mac" && j.status === "running" && !(D.mac || {}).online ? " · Mac asleep: carries on when it wakes" : ""}</div>`;
+    const head = `<div class="t">${esc(j.title || j.strategy)}</div><div class="muted">${j.target === "mac" ? "Mac" : "Server"} · ${esc(j.dataset)} · ${dd(j.from)} – ${j.to ? dd(j.to) : "latest"}${j.note ? " · " + esc(j.note) : ""}${j.target === "mac" && j.status === "queued" && !(D.mac || {}).online ? " · waits for the Mac" : ""}${jobProgress(j)}${j.target === "mac" && j.status === "running" && !(D.mac || {}).online ? " · Mac asleep: carries on when it wakes" : ""}</div>`;
     const inner = `<span class="st ${CLS[j.status] || "muted"}" title="${TITLE[j.status] || j.status}" aria-label="${TITLE[j.status] || j.status}">${SVG[j.status] || ""}</span><div class="b">${head}${figs}</div>`;
     return j.status === "done" && j.run ? `<a class="job" href="/backtests?run=${encodeURIComponent(j.run)}">${inner}</a>` : `<div class="job">${inner}</div>`;
   }).join("") + ended() : `Nothing running. Finished backtests are in <a href="/backtests">Results</a>.${ended()}`;
@@ -7345,12 +7416,12 @@ function jobs() {
     ? `Finished: ${esc(j.title || j.strategy)} · <a href="#" data-open="${esc(j.id)}">show results</a>` : `<span class="down">Stopped</span>: ${esc(j.title || j.strategy)} · ${esc(j.message || "")}`}</div>`).join("");
   $("jobs").className = list.length ? "" : "muted";
   $("jobs").innerHTML = list.length ? list.map(j => {
-    const keys = Object.keys(j.grid || {}), prog = j.progress ? ` · ${j.progress[0]} of ${j.progress[1]}` : "";
+    const keys = Object.keys(j.grid || {});
     const best = j.status === "done" && j.rows && j.rows[0];
     const per = (j.periods || ["all"])[0];
     return `<div class="job${OPEN && OPEN.id === j.id ? " sel" : ""}" data-j="${esc(j.id)}"><span class="st ${CLS[j.status] || "muted"}">${SVG[j.status] || ""}</span>
       <div class="b"><div class="t">${esc(j.title || j.strategy)}${j.optimise ? " · find best settings" : ""}</div>
-      <div class="muted">${j.target === "mac" ? "Mac" : "Server"} · ${esc(j.dataset)} · ${dd(j.from)} – ${j.to ? dd(j.to) : "latest"} · ${keys.map(esc).join(" × ")} · ${j.total || keys.reduce((a, k) => a * j.grid[k].length, 1)} combinations${j.status === "running" ? prog : ""}${j.target === "mac" && j.status === "queued" && !(D.mac || {}).online ? " · waits for the Mac" : ""}</div>
+      <div class="muted">${j.target === "mac" ? "Mac" : "Server"} · ${esc(j.dataset)} · ${dd(j.from)} – ${j.to ? dd(j.to) : "latest"} · ${keys.map(esc).join(" × ")} · ${j.total || keys.reduce((a, k) => a * j.grid[k].length, 1)} combinations${j.target === "mac" && j.status === "queued" && !(D.mac || {}).online ? " · waits for the Mac" : ""}${jobProgress(j)}${j.target === "mac" && j.status === "running" && !(D.mac || {}).online ? " · Mac asleep: carries on when it wakes" : ""}</div>
       ${j.status === "failed" ? `<div class="down" style="font-size:13px">${esc(j.message)}</div>` : ""}
       ${best ? `<div class="muted">Best ${j.split ? "in-sample" : ""}: ${keys.map(k => `${esc(k)} ${esc(best[k])}`).join(", ")} · <span class="${best[per + "_net"] >= 0 ? "up" : "down"}">${inr(best[per + "_net"])}</span></div>` : ""}</div></div>`;
   }).join("") + tail : `Nothing running. Finished sweeps are in <a href="/backtests">Results</a>.${tail}`;
@@ -7523,6 +7594,10 @@ load().catch(e => $("jobs").textContent = "Cannot load: " + e.message);
 </html>
 """
 
+
+# the Run and Sweep pages share the progress line (stage, N of M, running, time left, last update)
+RUN_PAGE = RUN_PAGE.replace("</head>", "<script>" + JOB_PROGRESS_JS + "</script>\n</head>", 1)
+SWEEP_PAGE = SWEEP_PAGE.replace("</head>", "<script>" + JOB_PROGRESS_JS + "</script>\n</head>", 1)
 
 COMPARE_PAGE = r"""<!doctype html>
 <html lang="en">
