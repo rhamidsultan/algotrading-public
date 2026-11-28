@@ -93,6 +93,32 @@ def _read(path: Path):
     return df["_s"].to_numpy(np.int64), df
 
 
+def _first_second(path: Path, rows: int = 20):
+    """Second of the day of a file's first row (the earliest of its first few rows: a late packet can be written a
+    second late), read from the top of the file only, or None. Enough to know whether a strike has traded yet
+    without loading the whole day (a day is ~300 files, ~320 MB)."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            head = f.readline().strip().split(",")
+            if "time" not in head:
+                return None
+            k, best = head.index("time"), None
+            for _ in range(rows):
+                line = f.readline()
+                if not line:
+                    break
+                t = line.split(",")[k].strip()
+                try:
+                    hh, mm, ss = t[-8:].split(":")
+                    v = int(hh) * 3600 + int(mm) * 60 + int(float(ss))
+                except ValueError:
+                    continue
+                best = v if best is None else min(best, v)
+            return best
+    except OSError:
+        return None
+
+
 def _col(df: pd.DataFrame, name: str) -> np.ndarray:
     return df[name].to_numpy(float) if name in df else np.full(len(df), np.nan)
 
@@ -148,8 +174,10 @@ class Sec1Feed(Feed):
     gives_day_ohlc = True
 
     def __init__(self, cfg: dict, days: list[date], root: Path | None = None, store: OptionStore | None = None,
-                 index_close=None):
+                 index_close=None, progress=None):
         super().__init__(cfg)
+        self._progress = progress                  # callable(day number, days): the job's "day N of M"
+        self._first: dict = {}                     # (day, name) -> first second with a row (listed_strikes)
         self.root = root or _root()
         self.store = store
         self._index_close = index_close           # callable(day) -> close from the 1-minute set, for missing days
@@ -198,8 +226,21 @@ class Sec1Feed(Feed):
         return f"{c.expiry:%Y-%m-%d}_{int(c.strike)}{c.right}"
 
     # ---- stepping ---------------------------------------------------------------------------
+    def _first_sec(self, day: date, name: str):
+        key = (day, name)
+        if key not in self._first:
+            s = self._series.get(key)
+            self._first[key] = (int(s.secs[0]) if s is not None and len(s.secs) else None) if key in self._series \
+                else _first_second(self.root / f"{day:%Y-%m-%d}" / f"{name}.csv")
+        return self._first[key]
+
     def __iter__(self):
-        for day in self.days:
+        for n, day in enumerate(self.days, 1):
+            if self._progress:
+                try:
+                    self._progress(n, len(self.days))
+                except Exception:  # noqa: BLE001 - a progress note never stops the backtest
+                    pass
             spot, vix = self._get(day, "NIFTY"), self._get(day, "INDIAVIX")
             if self.store is not None:
                 self.store.forget_expired(day)
@@ -217,6 +258,7 @@ class Sec1Feed(Feed):
                 self._cache = {}
                 yield self.now
             self._series = {k: v for k, v in self._series.items() if k[0] >= day}   # free earlier days
+            self._first = {k: v for k, v in self._first.items() if k[0] >= day}
 
     def settle_spot(self, expiry: date):
         """The index close for legs expiring on a day that was not replayed (Stepper's late settlement)."""
@@ -242,9 +284,9 @@ class Sec1Feed(Feed):
         day = self.now.date()
         ks = self._names(day).get((expiry, right)) or set()
         seen = set()
-        for k in ks:
-            s = self._get(day, f"{expiry:%Y-%m-%d}_{int(k)}{right}")
-            if s is not None and s.known(self._sec) is not None:
+        for k in ks:                       # top of each file only: whole files are loaded for strikes quoted
+            f = self._first_sec(day, f"{expiry:%Y-%m-%d}_{int(k)}{right}")
+            if f is not None and f < self._sec:          # a row of an earlier second: known now (as _Series.known)
                 seen.add(k)
         return seen if ks else None
 

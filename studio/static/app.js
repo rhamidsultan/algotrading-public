@@ -98,19 +98,19 @@ function settingsOf(pid) {        // the strategy's defaults, then the preset's 
 function startCard() {
   if (QS.strategy !== S.strategy.name) {      // new strategy: fresh choices; its last backtest's data set
     const last = S.runs.find(r => r.dataset) || {};
-    QS = {...QS, strategy: S.strategy.name, preset: (S.presets[0] || {}).id || "", dataset: last.dataset || "", lots: "", label: "", done: ""};
+    QS = {...QS, strategy: S.strategy.name, preset: (S.presets[0] || {}).id || "", dataset: "", lots: "", label: "", done: ""};
   }
   if (PENDING) { QS = {...QS, ...PENDING, lots: ""}; PENDING = null; }
   if (QS.lots === "") QS.lots = settingsOf(QS.preset).lots ?? 1;
   const shadowOk = ME.owner || ME.live_use, ds = (BT || {}).datasets || [], mac = ((BT || {}).mac || {}).online && !S.strategy.built;
   if (!mac) QS.target = "server";                         // built strategies live on the server only
-  if (!QS.dataset || !ds.some(d => d.name === QS.dataset)) QS.dataset = (ds.find(d => d.name === "TD_NIFTY_1minute") || ds[0] || {}).name || "";
+  if (!QS.dataset || !ds.some(d => d.name === QS.dataset)) QS.dataset = (ds.find(d => d.sec1) || ds.find(d => d.name === "NIFTY_minute") || ds[0] || {}).name || "";   // 1-second bars first
   const kinds = [["backtest", "Backtest"], ["paper", "Paper"], ...(shadowOk ? [["shadow", "Shadow"]] : [])];
   if (!kinds.some(k => k[0] === QS.kind)) QS.kind = "backtest";
   const opt = (v, cur, t) => `<option value="${esc(v)}"${String(v) === String(cur) ? " selected" : ""}>${esc(t)}</option>`;
   let form = "";
   if (QS.kind === "backtest") {
-    form = `<div class="form"><div><label for="qDs">Data set</label><select id="qDs">${ds.map(d => opt(d.name, QS.dataset, d.name)).join("") || "<option>Loading…</option>"}</select></div>
+    form = `<div class="form"><div><label for="qDs">Data set</label><select id="qDs">${ds.map(d => opt(d.name, QS.dataset, d.sec1 ? `NIFTY 1-second (${d.days.length} days)` : d.name)).join("") || "<option>Loading…</option>"}</select></div>
       <div><label for="qPer">Period</label><select id="qPer">${PERIODS.map(([v, t]) => opt(v, QS.period, t)).join("")}</select></div>
       ${mac ? `<div><label for="qTgt">Run on</label><select id="qTgt">${opt("server", QS.target, "Server")}${opt("mac", QS.target, "Mac (" + esc(BT.mac.name || "helper") + ")")}</select></div>` : ""}</div>`;
   } else {
