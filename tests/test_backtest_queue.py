@@ -183,7 +183,7 @@ def test_mac_jobs_wait_for_the_mac_helper_and_report_back(engine, monkeypatch):
     import shutil
     shutil.copy(ROOT / "data" / "spot" / "SAMPLE_NIFTY_5minute.csv", spot / "SAMPLE_NIFTY_5minute.csv")
     assert c.get("/api/backtest-runner").get_json()["mac"]["online"] is False
-    assert c.post("/api/lab-agent/claim", json={"name": "Mac", "beat_only": True}).get_json() == {"job": None}
+    assert c.post("/api/lab-agent/claim", json={"name": "Mac", "beat_only": True}).get_json() == {"job": None, "stop": []}
     assert c.get("/api/backtest-runner").get_json()["mac"]["online"] is True       # a beat alone marks it online
     body = {"strategy": "expiry_doubler", "dataset": "NIFTY_minute", "target": "mac", "from": "2025-01-01", "to": "2025-02-28"}
     job = c.post("/api/backtest-runner", json=body).get_json()["job"]
@@ -485,7 +485,7 @@ def test_running_jobs_show_time_running_time_left_and_what_waits_behind(tmp_path
         out = subprocess.run(["node", "-e", js], capture_output=True, text=True).stdout.splitlines()
         assert out[0].startswith(" · combination 11 of 41 · running 30 min · about 1 h left · last update 2 min ago")
         assert "no update for 20 min: may be stuck" in out[1]
-        assert out[2] == " · waits behind a sweep (intraday_strangle), combination 11 of 41"
+        assert out[2].startswith(" · waits behind a sweep (intraday_strangle), combination 11 of 41 <button")   # + Stop
 
 
 def test_job_reports_are_time_stamped(tmp_path, monkeypatch):
@@ -496,3 +496,87 @@ def test_job_reports_are_time_stamped(tmp_path, monkeypatch):
     assert job["updated"] and job["p0"]["step"] == "day" and job["p0"]["n"] == 1     # pace from the first report
     bq._status(job, step="combo", progress=[1, 5])
     assert job["p0"]["step"] == "combo"
+
+
+def test_stop_a_server_backtest_waiting_or_running(engine, monkeypatch):
+    """Stop: a waiting job is dropped; a running one ends as "stopped" within a trading day of prices."""
+    tmp_path, cfg = engine
+    monkeypatch.setattr(bq, "STOPS", tmp_path / "runtime" / "backtest-stop")
+    from algolab import stopping
+    jobs = tmp_path / "runtime" / "backtest-jobs"
+    # waiting: its stop file is there when the runner picks it up
+    _queue(tmp_path, "20261128-120000-wait", strategy="short_straddle", dataset="SAMPLE_NIFTY_5minute")
+    (tmp_path / "runtime" / "backtest-stop").mkdir(parents=True)
+    (tmp_path / "runtime" / "backtest-stop" / "20261128-120000-wait").write_text("x")
+    # running: Stop pressed on the third trading day (the engine looks once a day)
+    real_check, days = stopping.check, []
+
+    def check():
+        days.append(1)
+        if len(days) == 3:
+            (bq.STOPS / "20261128-120001-runs").write_text("x")
+        real_check()
+    monkeypatch.setattr(stopping, "check", check)
+    _queue(tmp_path, "20261128-120001-runs", strategy="short_straddle", dataset="SAMPLE_NIFTY_5minute",
+           **{"from": "2025-01-01", "to": "2025-03-31"})
+    assert bq.process(tmp_path / "store", cfg=cfg) == 1                 # the stopped-while-waiting one is not run
+    w = json.loads((jobs / "20261128-120000-wait.json").read_text())
+    assert w["status"] == "stopped" and "before it started" in w["message"]
+    r = json.loads((jobs / "20261128-120001-runs.json").read_text())
+    assert r["status"] == "stopped" and r["message"].startswith("Stopped on the page"), r["message"]
+    assert len(days) == 3 and not list((tmp_path / "runtime" / "backtest-stop").iterdir())   # ended that day; cleaned up
+    assert not stopping.asked() and stopping.ENV not in __import__("os").environ
+
+
+def test_stop_buttons_and_the_mac_helper(engine, monkeypatch):
+    tmp_path, cfg = engine
+    (tmp_path / "dash").mkdir()
+    mod, c = _panel(tmp_path / "dash", monkeypatch)
+    rt = tmp_path / "dash" / "runtime"
+    body = {"strategy": "expiry_doubler", "dataset": "NIFTY_minute", "from": "2025-01-01", "to": "2025-02-28"}
+    # server, waiting: off the queue at once
+    j = c.post("/api/backtest-runner", json=body).get_json()["job"]
+    r = c.post(f"/api/backtest-runner/job/{j['id']}/stop")
+    assert r.status_code == 200 and r.get_json()["job"]["status"] == "stopped"
+    assert not list((rt / "backtest-queue").glob("*.json"))
+    assert c.post(f"/api/backtest-runner/job/{j['id']}/stop").status_code == 409            # already ended
+    # server, running: a stop file, shown as stopping
+    j2 = c.post("/api/backtest-runner", json=body).get_json()["job"]
+    (rt / "backtest-queue" / f"{j2['id']}.json").unlink()
+    f = rt / "backtest-jobs" / f"{j2['id']}.json"
+    f.write_text(json.dumps({**json.loads(f.read_text()), "status": "running", "started": "2026-11-28T12:00:00"}))
+    assert c.post(f"/api/backtest-runner/job/{j2['id']}/stop").get_json()["job"]["stopping"] is True
+    assert (rt / "backtest-stop" / j2["id"]).exists()
+    assert next(x for x in c.get("/api/backtest-runner").get_json()["jobs"] if x["id"] == j2["id"])["stopping"] is True
+    # Mac, running and online: told through the beat and the status reply; the helper ends it as stopped
+    c.post("/api/lab-agent/claim", json={"name": "Mac", "beat_only": True})
+    j3 = c.post("/api/backtest-runner", json={**body, "target": "mac"}).get_json()["job"]
+    claimed = c.post("/api/lab-agent/claim", json={"name": "Mac"}).get_json()["job"]
+    assert claimed["id"] == j3["id"]
+    c.post(f"/api/backtest-runner/job/{j3['id']}/stop")
+    assert c.post("/api/lab-agent/claim", json={"name": "Mac", "beat_only": True, "job": j3["id"]}).get_json()["stop"] == [j3["id"]]
+    assert c.post("/api/lab-agent/status", json={"id": j3["id"], "status": "running", "progress": [3, 22], "step": "day"}).get_json()["stop"] is True
+    from algolab import lab_agent, stopping
+    agent = lab_agent.Agent(session=_Client(c), cfg={"url": "http://dash"}, log=lambda m: None, sync=lambda log: "")
+    agent._stop_file = tmp_path / "stopflag"
+    stopping.watch(agent._stop_file)
+    try:
+        agent.status(claimed, status="running", progress=[4, 22], step="day")      # the reply says stop: flag made
+        assert stopping.asked()
+        with pytest.raises(stopping.Stopped):
+            stopping.check()
+    finally:
+        stopping.watch(None)
+    agent.status(claimed, status="stopped", message="Stopped on the page after 4 of 22")
+    done = json.loads((rt / "backtest-jobs" / f"{j3['id']}.json").read_text())
+    assert done["status"] == "stopped" and done["finished"] and not (rt / "backtest-stop" / j3["id"]).exists()
+    # Mac asleep: stopped here at once; when it wakes and reports, it is told to drop it
+    j4 = c.post("/api/backtest-runner", json={**body, "target": "mac"}).get_json()["job"]
+    c.post("/api/lab-agent/claim", json={"name": "Mac"})
+    monkeypatch.setattr(mod, "_mac_status", lambda: {"online": False})
+    assert c.post(f"/api/backtest-runner/job/{j4['id']}/stop").get_json()["job"]["status"] == "stopped"
+    assert c.post("/api/lab-agent/status", json={"id": j4["id"], "status": "running", "progress": [9, 22]}).get_json()["stop"] is True
+    assert json.loads((rt / "backtest-jobs" / f"{j4['id']}.json").read_text())["status"] == "stopped"   # not reopened
+    page = c.get("/backtests/run").get_data(as_text=True)
+    assert "data-stop=" in page and "Tap again to stop" in page and "tdCard" not in page
+    assert "data-stop=" in c.get("/backtests/sweep").get_data(as_text=True)

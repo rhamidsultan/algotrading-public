@@ -4262,6 +4262,7 @@ def _err(e, code=400):
 # The page writes a request into the engine's runtime/backtest-queue/; the engine's algolab-backtest path unit runs it
 # at low priority (algolab/backtest_queue.py) and puts the result on the Backtests page.
 BT_QUEUE, BT_JOBS = RT / "backtest-queue", RT / "backtest-jobs"
+BT_STOPS = RT / "backtest-stop"           # <id>: Stop pressed (algolab/stopping.py; the runner and the Mac helper look)
 BT_MAX_QUEUED = 3
 BT_SWEEP_MAX = 60          # combinations on the server
 BT_SWEEP_MAX_MAC = 400     # and on the Mac (faster, several at once)
@@ -4346,6 +4347,8 @@ def _job_clock(jobs, now=None):
                         f"{what}{' (' + name + ')' if name and j.get('kind') != 'compare_period' else ''}"
                         + (f", {_BT_STEP.get(j.get('step'), 'step')} {p[0]} of {p[1]}" if isinstance(p, list) and len(p) == 2 else ""))
     for j in jobs:
+        if j.get("status") in ("queued", "running") and j.get("id") and (BT_STOPS / str(j["id"])).exists():
+            j["stopping"] = True
         if j.get("status") == "queued" and busy.get(j.get("target") or "server"):
             j["behind"] = busy[j.get("target") or "server"]
     return jobs
@@ -4412,7 +4415,7 @@ def api_backtest_finished():
     out = []
     for f in sorted(BT_JOBS.glob("*.json"), reverse=True)[:300]:
         j = _json(f)
-        if not j or j.get("kind") in ("td_live_test", "kite_tick_test") or j.get("status") not in ("done", "failed") or (j.get("kind") != "sweep" and j.get("status") == "done"):
+        if not j or j.get("kind") in ("td_live_test", "kite_tick_test") or j.get("status") not in ("done", "failed", "stopped") or (j.get("kind") != "sweep" and j.get("status") == "done"):
             continue
         rows = j.get("rows") or []
         per = (j.get("periods") or ["all"])[0]
@@ -4425,6 +4428,45 @@ def api_backtest_finished():
         if len(out) >= 100:
             break
     return jsonify(jobs=out)
+
+
+@panel.route("/api/backtest-runner/job/<jid>/stop", methods=["POST"])
+def api_backtest_job_stop(jid):
+    """Algo Lab › Run / Sweep › Stop. A waiting job is taken off the queue at once. A running one gets a stop file:
+    the runner (server) or the Mac helper sees it within a trading day of prices and ends the job as "stopped".
+    A Mac job is stopped here at once when the Mac is asleep: if it wakes it is told to drop it."""
+    if not can("backtests", "use"):
+        return jsonify(error="This login may not stop backtests."), 403
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}-[a-z0-9]{4}", jid or ""):
+        return jsonify(error="No such job."), 404
+    f = BT_JOBS / f"{jid}.json"
+    j = _json(f)
+    if not j:
+        return jsonify(error="No such job."), 404
+    if j.get("status") not in ("queued", "running"):
+        return jsonify(error="It has already ended."), 409
+    now = _dt.now().isoformat(timespec="seconds")
+    stopped = dict(status="stopped", finished=now, message="Stopped on the page" + (" before it started" if j.get("status") == "queued" else ""))
+    if j.get("target") == "mac":
+        if j.get("status") == "queued" or not _mac_status().get("online"):
+            j.update(stopped)
+            _job_write(j)
+            return jsonify(job=j)
+    elif j.get("status") == "queued":
+        q = BT_QUEUE / f"{jid}.json"
+        try:
+            q.unlink()                                    # still waiting: the runner never sees it
+            j.update(stopped)
+            _job_write(j)
+            return jsonify(job=j)
+        except FileNotFoundError:
+            pass                                          # the runner has just taken it: stop it like a running one
+    try:
+        BT_STOPS.mkdir(parents=True, exist_ok=True)
+        (BT_STOPS / jid).write_text(now)
+    except OSError as e:
+        return jsonify(error=f"Could not stop it: {e}"), 500
+    return jsonify(job={**j, "stopping": True})
 
 
 @panel.route("/api/backtest-runner/job/<jid>/delete", methods=["POST"])
@@ -4751,8 +4793,10 @@ def api_lab_agent_claim():
                                         "can": can_do}))
     except OSError:
         pass
-    if b.get("beat_only"):                                  # "still here, busy with a job"
-        return jsonify(job=None)
+    if b.get("beat_only"):                                  # "still here, busy with a job"; is it to stop?
+        jid = str(b.get("job") or "")
+        stop = [jid] if re.fullmatch(r"[0-9]{8}-[0-9]{6}-[a-z0-9]{4}", jid) and (BT_STOPS / jid).exists() else []
+        return jsonify(job=None, stop=stop)
     # The helper asks for work only when it is idle: a job it still has "running" was lost (the helper restarted,
     # crashed or ran out of memory). Say so on the page instead of leaving it running for ever.
     runner = str(b.get("name") or "Mac")[:40]
@@ -4783,17 +4827,22 @@ def api_lab_agent_status():
     job = _json(BT_JOBS / f"{jid}.json") if re.fullmatch(r"[0-9]{8}-[0-9]{6}-[a-z0-9]{4}", jid) else None
     if not job or job.get("target") != "mac":
         return jsonify(error="No such Mac job."), 404
-    changes = {k: v for k, v in b.items() if k in _BT_FIELDS}
-    job.update(changes)
-    _job_stamp(job, changes)
-    if job.get("status") in ("done", "failed"):
-        job["finished"] = _dt.now().isoformat(timespec="seconds")
-    _job_write(job)
     try:
         MAC_BEAT.touch()
     except OSError:
         pass
-    return jsonify(ok=True)
+    flag = BT_STOPS / jid
+    if job.get("status") == "stopped":                   # stopped here while the Mac was away: it drops it
+        flag.unlink(missing_ok=True)
+        return jsonify(ok=True, stop=True)
+    changes = {k: v for k, v in b.items() if k in _BT_FIELDS}
+    job.update(changes)
+    _job_stamp(job, changes)
+    if job.get("status") in ("done", "failed", "stopped"):
+        job["finished"] = _dt.now().isoformat(timespec="seconds")
+        flag.unlink(missing_ok=True)
+    _job_write(job)
+    return jsonify(ok=True, stop=flag.exists())
 
 
 @panel.route("/chart")
@@ -6678,9 +6727,31 @@ except Exception as _e:  # noqa: BLE001 - without it the dashboard keeps its sin
 JOB_PROGRESS_JS = r"""
 function jobDur(sec) { sec = Math.round(sec || 0); if (sec < 60) return sec + " s"; const m = Math.round(sec / 60); if (m < 60) return m + " min";
   const h = Math.floor(m / 60), r = m % 60; return h + " h" + (r ? " " + r + " min" : ""); }
+// Stop: tap once to arm, again within 4 s to stop (no pop-up dialogs)
+function jobStopBtn(j) {
+  if (j.stopping || !(j.status === "queued" || j.status === "running") || !/^(backtest|sweep|compare_period)?$/.test(j.kind || "")) return "";
+  return ` <button type="button" data-stop="${esc(j.id)}" style="font:inherit;font-size:12px;padding:2px 10px;margin-left:6px;border-radius:6px;border:1px solid var(--down);background:none;color:var(--down);cursor:pointer">Stop</button>`;
+}
+if (typeof document !== "undefined") document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("button[data-stop]");
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  if (!b.dataset.armed) {
+    b.dataset.armed = "1"; b.textContent = "Tap again to stop"; b.style.background = "var(--down)"; b.style.color = "#fff";
+    setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = "Stop"; b.style.background = "none"; b.style.color = "var(--down)"; } }, 4000);
+    return;
+  }
+  b.disabled = true; b.textContent = "Stopping…";
+  try {
+    const r = await fetch(`/api/backtest-runner/job/${encodeURIComponent(b.dataset.stop)}/stop`, {method: "POST"});
+    if (!r.ok) { const j = await r.json().catch(() => ({})); b.textContent = j.error || "Could not stop it"; }
+  } catch (err) { b.textContent = "Could not stop it"; }
+  if (typeof load === "function") load();
+}, true);
 // one line that tells slow from stuck: stage, N of M, time running, time left, last report
 function jobProgress(j) {
-  if (j.status === "queued") return j.behind ? ` · waits behind ${esc(j.behind)}` : (j.target === "mac" ? "" : " · starts in a moment");
+  if (j.stopping) return ` · <b>stopping…</b> (ends within a trading day of prices)${jobStopBtn(j)}`;
+  if (j.status === "queued") return (j.behind ? ` · waits behind ${esc(j.behind)}` : (j.target === "mac" ? "" : " · starts in a moment")) + jobStopBtn(j);
   if (j.status !== "running") return "";
   const p = Array.isArray(j.progress) && j.progress.length === 2 ? j.progress : null;
   const word = {day: "day", combo: "combination", session: "session"}[j.step] || (j.kind === "sweep" ? "combination" : j.kind === "compare_period" ? "session" : "step");
@@ -6692,6 +6763,7 @@ function jobProgress(j) {
   const quiet = j.since_update_s, limit = p ? 900 : 2400;
   if (quiet != null && quiet > limit) s += ` · <span class="down">no update for ${jobDur(quiet)}: may be stuck</span>`;
   else if (quiet != null && j.elapsed_s > 20) s += ` · last update ${jobDur(quiet)} ago`;
+  s += jobStopBtn(j);
   if (p && p[1] > 0 && !syncing) s += `<div style="height:4px;background:var(--line);border-radius:2px;margin-top:5px;max-width:360px"><div style="width:${Math.min(100, Math.round(p[0] / p[1] * 100))}%;height:4px;background:var(--accent);border-radius:2px"></div></div>`;
   return s;
 }
@@ -6771,17 +6843,6 @@ table.sw{border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nu
     <h2>In progress</h2>
     <div id="jobs" class="muted">Loading…</div>
   </div>
-  <div class="card" id="tdCard">
-    <h2>TrueData real-time test</h2>
-    <div class="muted">How many price updates a second TrueData's live feed sends, against Zerodha's about one: the Mac counts them
-      for 2 minutes on NIFTY, the NIFTY future and this week's at-the-money call and put. Market hours only (9:15–15:25 IST).</div>
-    <button class="btn" id="tdRun" type="button" style="margin-top:10px">Test TrueData live</button>
-    <button class="btn" id="tdMcx" type="button" style="margin-top:10px">MCX: TrueData vs Zerodha</button>
-    <div class="muted" style="margin-top:4px">MCX: gold, silver, crude oil and natural gas futures, TrueData on the Mac and Zerodha on the server
-      counted over the same 2 minutes (9:00–23:20 IST).</div>
-    <div class="muted" id="tdSt" style="margin-top:8px"></div>
-    <div style="overflow-x:auto"><table class="sw" id="tdTbl" style="margin-top:6px"></table></div>
-  </div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -6790,8 +6851,8 @@ const SVG = {
   running: '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>',
   done: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   failed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6L6 18"/></svg>'};
-const TITLE = {queued: "Waiting", running: "Running", done: "Done", failed: "Failed"};
-const CLS = {queued: "muted", running: "warn", done: "up", failed: "down"};
+const TITLE = {queued: "Waiting", running: "Running", done: "Done", failed: "Failed", stopped: "Stopped"};
+const CLS = {queued: "muted", running: "warn", done: "up", failed: "down", stopped: "muted"};
 let D = null, timer = null;
 const SWEEP = location.pathname === "/backtests/sweep";
 if (SWEEP) {
@@ -7013,62 +7074,6 @@ $("strategy").onchange = strat; $("dataset").onchange = range; $("run").onclick 
 $("params").addEventListener("input", count);
 $("target").addEventListener("click", e => { const b = e.target.closest("button"); if (b) target(b.dataset.t); });
 load().catch(e => $("jobs").textContent = "Cannot load: " + e.message);
-// TrueData real-time test (run by the Mac helper)
-let tdTimer = null;
-function tdShow(t, mac) {
-  const st = $("tdSt"), tbl = $("tdTbl");
-  tbl.innerHTML = "";
-  if (!t) { st.textContent = mac && !mac.online ? "The Mac is asleep: it runs the test when it wakes." : ""; return; }
-  const when = new Date(t.queued).toLocaleString("en-IN", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
-  const old = mac && mac.online && !(mac.can || []).includes("td_live_test");
-  if (t.status === "queued") st.innerHTML = old ? `<span class="down">Waiting: the Mac helper runs older code. On the Mac: <code>git pull</code> in ~/Trading/algotrading, then double-click deploy/install-mac-agent.command. The test then starts by itself.</span>`
-    : `Sent ${when} · ${mac && mac.online ? "the Mac starts it in a moment" : "waits for the Mac (asleep or off)"}`;
-  else if (t.status === "running") st.textContent = "The Mac is counting ticks (about 2 minutes)…";
-  else if (t.status === "failed") st.innerHTML = `<span class="down">Did not run (${esc(when)}): ${esc(t.message || "")}</span>`;
-  else {
-    const r = (t.td && t.td.results) || [];
-    if (t.set === "mcx") { tdBoth(t, PAIR, when); clearTimeout(tdTimer); if (!PAIR || PAIR.status === "queued" || PAIR.status === "running") tdTimer = setTimeout(tdLoad, 5000); return; }
-    const opt = r.filter(x => /(CE|PE)$/.test(x.symbol)), avg = opt.length ? opt.reduce((a, x) => a + x.per_second, 0) / opt.length : null;
-    st.innerHTML = `Result of ${esc(when)}` + (avg != null ? ` · options: <b>${avg.toFixed(1)}</b> updates a second (Zerodha about 1)` : "")
-      + (r.length ? "" : " · no ticks arrived: the trial may not include real-time data");
-    tbl.innerHTML = r.length ? `<tr><th>Symbol</th><th>a second</th><th>most in 1 s</th><th>seconds with 2+</th><th>trades</th></tr>` + r.map(x =>
-      `<tr><td>${esc(x.symbol)}</td><td>${x.per_second}</td><td>${x.most_in_one_second}</td><td>${x.share_2_or_more_pct}%</td><td>${x.trades}</td></tr>`).join("") : "";
-  }
-  clearTimeout(tdTimer);
-  if (t.status === "queued" || t.status === "running") tdTimer = setTimeout(tdLoad, 5000);
-}
-async function tdLoad() {
-  try { const r = await fetch("/api/td-live-test", {cache: "no-store"}); if (r.ok) { const j = await r.json(); PAIR = j.pair; tdShow(j.test, j.mac); } } catch (e) {}
-}
-let PAIR = null;
-function tdBoth(t, k, when) {
-  const st = $("tdSt"), tbl = $("tdTbl");
-  const td = {}, ze = {};
-  ((t.td && t.td.results) || []).forEach(x => td[x.symbol] = x);
-  ((k && k.kite && k.kite.results) || []).forEach(x => ze[x.symbol] = x);
-  const syms = [...new Set([...(t.symbols || []), ...Object.keys(td), ...Object.keys(ze)])];
-  const zs = !k ? "not found" : k.status === "failed" ? "failed: " + (k.message || "") : k.status === "done" ? "done" : k.status;
-  st.innerHTML = `MCX test of ${esc(when)} · TrueData (Mac): ${esc(t.status)} · Zerodha (server): ${esc(zs)}`;
-  const cell = x => x ? `${x.per_second}/s <span class="muted">(max ${x.most_in_one_second}, 2+ in ${x.share_2_or_more_pct}%, ${x.trades} trades)</span>` : "–";
-  tbl.innerHTML = `<tr><th>Future</th><th>TrueData</th><th>Zerodha</th></tr>` + syms.map(s => `<tr><td>${esc(s)}</td><td>${cell(td[s])}</td><td>${cell(ze[s])}</td></tr>`).join("");
-}
-$("tdMcx").onclick = async () => {
-  $("tdMcx").disabled = true;
-  try {
-    const r = await fetch("/api/td-live-test", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({set: "mcx"})}); const j = await r.json();
-    if (!r.ok) $("tdSt").innerHTML = `<span class="down">${esc(j.error || "Could not send it.")}</span>`; else { PAIR = j.pair; tdShow(j.test, j.mac); }
-  } catch (e) { $("tdSt").textContent = e.message; }
-  $("tdMcx").disabled = false;
-};
-$("tdRun").onclick = async () => {
-  $("tdRun").disabled = true;
-  try {
-    const r = await fetch("/api/td-live-test", {method: "POST"}); const j = await r.json();
-    if (!r.ok) $("tdSt").innerHTML = `<span class="down">${esc(j.error || "Could not send it.")}</span>`; else tdShow(j.test, j.mac);
-  } catch (e) { $("tdSt").textContent = e.message; }
-  $("tdRun").disabled = false;
-};
-tdLoad();
 </script>
 </body>
 </html>
@@ -7222,7 +7227,7 @@ const SVG = {queued: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
   running: '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>',
   done: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   failed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6L6 18"/></svg>'};
-const CLS = {queued: "muted", running: "warn", done: "up", failed: "down"};
+const CLS = {queued: "muted", running: "warn", done: "up", failed: "down", stopped: "muted"};
 let D = null, TARGET = null, timer = null, OPEN = null, charts = {};
 
 async function load() {
@@ -7733,7 +7738,7 @@ const SVG = {
   running: '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>',
   done: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   failed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6L6 18"/></svg>'};
-const CLS = {queued: "muted", running: "warn", done: "up", failed: "down"};
+const CLS = {queued: "muted", running: "warn", done: "up", failed: "down", stopped: "muted"};
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const dd = s => s ? new Date(s + "T00:00").toLocaleDateString("en-IN", {day: "numeric", month: "short"}) : "";
 const amt = v => v == null ? "–" : (v < 0 ? "-" : "") + "₹" + Math.round(Math.abs(v)).toLocaleString("en-IN");

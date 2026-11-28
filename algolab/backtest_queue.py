@@ -23,10 +23,12 @@ import zipfile
 from datetime import date, datetime
 from pathlib import Path
 
+from . import stopping
 from .config import RUNTIME, load_config
 
 QUEUE = RUNTIME / "backtest-queue"
 JOBS = RUNTIME / "backtest-jobs"
+STOPS = RUNTIME / "backtest-stop"           # <id>: Stop pressed on the page (algolab/stopping.py)
 ID_OK = re.compile(r"^[0-9]{8}-[0-9]{6}-[a-z0-9]{4}$")
 HEADLINE = ("Net P&L", "Return on capital %", "Max drawdown", "Cycles", "Win rate %", "Profit factor",
             "Fills on real option prices")
@@ -410,15 +412,33 @@ def process(store: Path | None = None, limit: int | None = None, cfg: dict | Non
             if not ID_OK.match(jid):
                 continue
             job = {**job, "id": jid}
+            stop_file = STOPS / jid
+            if stop_file.exists():                        # stopped while it waited
+                stop_file.unlink(missing_ok=True)
+                _status(job, status="stopped", finished=datetime.now().isoformat(timespec="seconds"), message="Stopped before it started")
+                continue
             _status(job, status="running", started=datetime.now().isoformat(timespec="seconds"), message="")
+            stopping.watch(stop_file)
             try:
                 kind = job.get("kind")
                 out = run_sweep(job, cfg) if kind == "sweep" else run_compare(job, store, cfg) if kind == "compare" \
                     else run_compare_period(job, cfg) if kind == "compare_period" \
                     else run_kite_ticks(job) if kind == "kite_tick_test" else run_one(job, store, cfg)
                 _status(job, status="done", finished=datetime.now().isoformat(timespec="seconds"), **out)
+            except stopping.Stopped:
+                _status(job, status="stopped", finished=datetime.now().isoformat(timespec="seconds"),
+                        message=f"Stopped on the page{_where(job)}")
             except Exception as e:  # report every failure on the page, never stop the queue
                 _status(job, status="failed", finished=datetime.now().isoformat(timespec="seconds"),
                         message=f"{type(e).__name__}: {e}"[:400])
+            finally:
+                stopping.watch(None)
+                stop_file.unlink(missing_ok=True)
             done += 1
         return done
+
+
+def _where(job: dict) -> str:
+    p = job.get("progress")
+    word = {"day": "day", "combo": "combination", "session": "session"}.get(job.get("step"), "step")
+    return f" at {word} {p[0]} of {p[1]}" if isinstance(p, list) and len(p) == 2 else ""

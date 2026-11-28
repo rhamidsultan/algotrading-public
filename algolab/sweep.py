@@ -177,7 +177,10 @@ def sweep(strategy_name: str, grid: dict, dataset: str, start=None, end=None, sp
     partial.unlink(missing_ok=True)
     rows = []
 
+    from .stopping import check as stop_check
+
     def keep(row):
+        stop_check()
         rows.append(row)
         pd.DataFrame([row]).to_csv(partial, mode="a", header=not partial.exists(), index=False)
         if progress:
@@ -188,9 +191,14 @@ def sweep(strategy_name: str, grid: dict, dataset: str, start=None, end=None, sp
         for j in jobs:
             keep(_one(j))
     else:
-        with ProcessPoolExecutor(max_workers=workers) as ex:
+        ex = ProcessPoolExecutor(max_workers=workers)
+        try:
             for fut in as_completed([ex.submit(_one, j) for j in jobs]):
                 keep(fut.result())
+        except BaseException:                      # stopped or failed: drop the combinations not started
+            ex.shutdown(wait=True, cancel_futures=True)
+            raise
+        ex.shutdown(wait=True)
     df = pd.DataFrame(rows)
     rank = f"{next(iter(periods))}_ret_dd"
     if rank in df:

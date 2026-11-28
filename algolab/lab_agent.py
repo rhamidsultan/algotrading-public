@@ -73,7 +73,20 @@ class Agent:
         return r.json()
 
     def status(self, job, **fields):
-        return self._post("/api/lab-agent/status", {"id": job["id"], **fields})
+        job.update({k: fields[k] for k in ("progress", "step") if k in fields})
+        r = self._post("/api/lab-agent/status", {"id": job["id"], **fields})
+        if isinstance(r, dict) and r.get("stop"):
+            self._stop_now()                       # Stop pressed on the page: the engine sees it within a day
+        return r
+
+    _stop_file = None
+
+    def _stop_now(self):
+        if self._stop_file:
+            try:
+                self._stop_file.touch()
+            except OSError:
+                pass
 
     def publish(self, run_dir: Path) -> str:
         from .publish import publish
@@ -86,18 +99,28 @@ class Agent:
         if not job:
             return False
         self.log(f"Job {job['id']}: {job.get('kind', 'backtest')} of {job['strategy']}")
+        import tempfile
+        from . import stopping
+        self._stop_file = Path(tempfile.gettempdir()) / f"algolab-stop-{job['id']}"
+        self._stop_file.unlink(missing_ok=True)
+        stopping.watch(self._stop_file)            # sweep workers started from here see it too
         busy = threading.Event()
 
         def beat():
             while not busy.wait(BEAT_SECONDS):
                 try:
-                    self._post("/api/lab-agent/claim", {"name": self.name, "beat_only": True, "can": list(CAN)})
+                    r = self._post("/api/lab-agent/claim", {"name": self.name, "beat_only": True, "can": list(CAN), "job": job["id"]})
+                    if job["id"] in (r.get("stop") or []):
+                        self._stop_now()
                 except Exception:  # noqa: BLE001
                     pass
         threading.Thread(target=beat, daemon=True).start()
         try:
             return self._run_job(job)
         finally:
+            stopping.watch(None)
+            self._stop_file.unlink(missing_ok=True)
+            self._stop_file = None
             busy.set()
 
     def _td_test(self, job) -> dict:
@@ -157,7 +180,9 @@ class Agent:
         self.log("Copying new prices from the server")
         self.status(job, status="running", step="sync")       # the page: "copying new prices from the server"
         note = self.sync(self.log)
+        from .stopping import Stopped, check
         try:
+            check()                                # stopped while the prices were copied
             if job.get("kind") == "sweep":
                 last = [0.0]
 
@@ -172,6 +197,10 @@ class Agent:
                 out = run_one(job, publish=self.publish, where=f"the Mac ({self.name})", progress=days)
             self.status(job, status="done", message=note, **out)
             self.log(f"Job {job['id']} done")
+        except Stopped:
+            p = job.get("progress")
+            self.status(job, status="stopped", message="Stopped on the page" + (f" after {p[0]} of {p[1]}" if p else ""))
+            self.log(f"Job {job['id']} stopped")
         except Exception as e:  # noqa: BLE001 - every failure is reported on the page
             self.status(job, status="failed", message=f"{type(e).__name__}: {e}"[:400])
             self.log(f"Job {job['id']} failed: {e}")
