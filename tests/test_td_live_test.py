@@ -68,7 +68,7 @@ def test_button_sends_a_mac_job_and_the_helper_reports(tmp_path, monkeypatch):
     t = c.get("/api/td-live-test").get_json()["test"]
     assert t["status"] == "done" and t["td"]["results"][0]["per_second"] == 3.2
     assert all(j["kind"] != "td_live_test" for j in c.get("/api/backtest-runner/finished").get_json()["jobs"])
-    assert "Test TrueData live" in c.get("/backtests/run").get_data(as_text=True)
+    assert "Test TrueData live" not in c.get("/backtests/run").get_data(as_text=True)   # removed from Run (28 Nov)
 
 
 def test_helper_refuses_outside_market_hours(monkeypatch):
@@ -96,7 +96,7 @@ def test_older_helper_is_not_given_the_test(tmp_path, monkeypatch):
     assert st["test"]["status"] == "queued" and st["mac"]["can"] == []
     got = c.post("/api/lab-agent/claim", json={"name": "Air", "can": ["backtest", "sweep", "td_live_test"]}).get_json()["job"]
     assert got["kind"] == "td_live_test"
-    assert "the Mac helper runs older code" in c.get("/backtests/run").get_data(as_text=True)
+    assert "Test TrueData live" not in c.get("/backtests/run").get_data(as_text=True)   # the test left Run on 28 Nov
 
 
 def test_truedata_side_watches_given_symbols(tmp_path, monkeypatch):

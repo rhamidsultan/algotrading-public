@@ -91,7 +91,7 @@ USE = {    # other methods (POST, DELETE): exact paths, regexes
     "paper": ({"/api/paper/margins"}, ()),
     "backtests": ({"/api/backtests/upload", "/api/backtest-runner", "/api/lab-agent/claim", "/api/lab-agent/status", "/api/td-live-test",
                    "/api/compare-period"},
-                  (re.compile(r"/api/backtests/[^/]+/delete"), re.compile(r"/api/backtest-runner/job/[0-9a-z-]+/delete"),
+                  (re.compile(r"/api/backtests/[^/]+/delete"), re.compile(r"/api/backtest-runner/job/[0-9a-z-]+/(delete|stop)"),
                    re.compile(r"/api/compare-period/[0-9a-z-]+/delete"))),
 }
 PAPER_ACTIONS = {"/api/paper/start", "/api/paper/stop", "/api/paper/kill", "/api/paper/reset", "/api/paper/delete",

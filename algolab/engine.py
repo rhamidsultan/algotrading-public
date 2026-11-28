@@ -302,8 +302,13 @@ def run(feed, strategy, broker: PaperBroker, logs: list | None = None, after_bar
         not_before: dict | None = None) -> list:
     """Drive `strategy` over `feed`. Returns the equity curve as (time, equity, spot) rows. `risk`: Orders & stops.
     `not_before`: {date: time} to start each of those days later (see Stepper)."""
+    from .stopping import check as stop_check
     stepper = Stepper(feed, strategy, broker, logs, after_bar, risk=risk, not_before=not_before)
+    last_day = None
     for now in feed:
+        if now.date() != last_day:                 # Stop on the page: looked for once a trading day
+            last_day = now.date()
+            stop_check()
         stepper.step(now)
     return stepper.curve
 

@@ -62,3 +62,36 @@ def test_safe_workers_fit_memory(monkeypatch):
     assert sw.safe_workers() == 3                                # 8 GB: 3 runs of ~2.5 GB, not 7
     monkeypatch.setattr(sw, "memory_gb", lambda: 64.0)
     assert sw.safe_workers() == 7                                # plenty of memory: one per core, one spare
+
+
+def _stop_one(job):
+    """A combination for the Stop test: notes itself, presses Stop, takes a moment (module level: sent to workers)."""
+    import os
+    import time
+    from pathlib import Path
+    (Path(os.environ["SWEEP_TEST_SEEN"]) / str(job[1]["stop_loss_pct"])).write_text("x")
+    Path(os.environ["ALGOLAB_STOP_FILE"]).write_text("x")
+    time.sleep(0.3)
+    return dict(job[1], all_net=1.0)
+
+
+def test_stop_drops_the_combinations_not_started(tmp_path, monkeypatch):
+    """Stop on the page during a sweep run by several processes: the ones not started are dropped."""
+    import multiprocessing
+    import algolab.sweep as sw
+    from algolab import stopping
+    if multiprocessing.get_start_method() != "fork":
+        pytest.skip("the stand-in combination is patched in, which needs forked workers")
+    seen = tmp_path / "seen"
+    seen.mkdir()
+    monkeypatch.setenv("SWEEP_TEST_SEEN", str(seen))
+    monkeypatch.setattr(sw, "_one", _stop_one)
+    monkeypatch.setattr(sw, "data_fingerprint", lambda d: {})
+    stopping.watch(tmp_path / "stop")
+    try:
+        with pytest.raises(stopping.Stopped):
+            sw.sweep("short_straddle", {"stop_loss_pct": [str(v) for v in range(10, 90, 2)]}, "X", workers=2,
+                     cfg={"a": 1}, out=tmp_path / "s")
+    finally:
+        stopping.watch(None)
+    assert len(list(seen.iterdir())) < 10                     # of 40: the rest never started
