@@ -164,7 +164,7 @@ class Agent:
                 def progress(n, t):
                     if time.time() - last[0] > 3 or n == t:
                         last[0] = time.time()
-                        self.status(job, status="running", progress=[n, t])
+                        self.status(job, status="running", progress=[n, t], step="combo")
                 out = run_sweep(job, workers=safe_workers(), progress=progress)
             else:
                 def days(n, t):

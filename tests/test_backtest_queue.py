@@ -455,3 +455,44 @@ def test_sweeps_and_walk_forward_use_the_1_second_days(engine, monkeypatch, tmp_
                      cfg=engine[1])
     assert seen["dataset"] == "NIFTY_1second"
     assert seen["periods"]["f1"][0] == date(2026, 11, 2) and seen["periods"]["f3"][1] == date(2026, 11, 27)
+
+
+def test_running_jobs_show_time_running_time_left_and_what_waits_behind(tmp_path, monkeypatch):
+    """Tell slow from stuck: elapsed, last report, time left from this step's pace; queued jobs say what they wait for."""
+    from datetime import datetime
+    mod, c = _panel(tmp_path, monkeypatch)
+    now = datetime(2026, 11, 28, 13, 30, 0)
+    jobs = [{"id": "a", "kind": "sweep", "status": "running", "target": "mac", "strategy": "intraday_strangle",
+             "started": "2026-11-28T13:00:00", "updated": "2026-11-28T13:28:00", "step": "combo", "progress": [11, 41],
+             "p0": {"step": "combo", "at": "2026-11-28T13:08:00", "n": 1}},
+            {"id": "b", "status": "queued", "target": "mac", "strategy": "iron_fly"},
+            {"id": "c", "kind": "compare_period", "status": "running", "target": "server", "started": "2026-11-28T13:29:00",
+             "updated": "2026-11-28T13:29:30", "step": "session", "progress": [7, 19]},
+            {"id": "d", "status": "queued", "target": "server", "strategy": "iron_fly"}]
+    mod._job_clock(jobs, now=now)
+    a = jobs[0]
+    assert (a["elapsed_s"], a["since_update_s"]) == (1800, 120)
+    assert a["eta_s"] == 20 * 60 / 10 * 30                               # 10 done in 20 min since 13:08, 30 left
+    assert jobs[1]["behind"] == "a sweep (intraday_strangle), combination 11 of 41"
+    assert jobs[3]["behind"] == "Compare with paper, session 7 of 19"
+    # the page's line, run by node on the same job
+    import shutil
+    import subprocess
+    if shutil.which("node"):
+        js = mod.JOB_PROGRESS_JS + "\nconst esc = s => String(s);\n" + \
+            f"console.log(jobProgress({json.dumps(a)})); console.log(jobProgress({json.dumps({**a, 'since_update_s': 1200})}));" \
+            f"console.log(jobProgress({json.dumps(jobs[1])}));"
+        out = subprocess.run(["node", "-e", js], capture_output=True, text=True).stdout.splitlines()
+        assert out[0].startswith(" · combination 11 of 41 · running 30 min · about 1 h left · last update 2 min ago")
+        assert "no update for 20 min: may be stuck" in out[1]
+        assert out[2] == " · waits behind a sweep (intraday_strangle), combination 11 of 41"
+
+
+def test_job_reports_are_time_stamped(tmp_path, monkeypatch):
+    monkeypatch.setattr(bq, "JOBS", tmp_path)
+    job = {"id": "20261128-130000-abcd"}
+    bq._status(job, status="running", step="day", progress=[1, 22])
+    bq._status(job, progress=[2, 22])
+    assert job["updated"] and job["p0"]["step"] == "day" and job["p0"]["n"] == 1     # pace from the first report
+    bq._status(job, step="combo", progress=[1, 5])
+    assert job["p0"]["step"] == "combo"
